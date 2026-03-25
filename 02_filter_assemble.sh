@@ -12,7 +12,9 @@
 #   --min-length N          Filtlong minimum read length (default: 200)
 #   --min-qscore N          Seqkit minimum average read quality (default: 7)
 #   --keep-percent N        Filtlong keep percent (default: 90)
+#   --genome-size SIZE      Override genome size (skip re-estimation)
 #   --subsample-count N     Number of read subsamples (default: 4)
+#   --min-read-depth N      Min subset read depth for subsampling (default: 25)
 #   --parallel-jobs N       Concurrent assembler jobs (default: 4)
 #   --canu-parallel-jobs N  Concurrent Canu jobs (default: 2)
 #   --skip-curation         Skip manual curation pauses
@@ -30,7 +32,9 @@ sample_name="${sample_name:-MyBacteria}"
 filtlong_min_length="${filtlong_min_length:-200}"
 min_qscore="${min_qscore:-7}"
 filtlong_keep_percent="${filtlong_keep_percent:-90}"
+genome_size_override="${genome_size_override:-}"
 subsample_count="${subsample_count:-4}"
+min_read_depth="${min_read_depth:-}"
 parallel_jobs="${parallel_jobs:-4}"
 canu_parallel_jobs="${canu_parallel_jobs:-2}"
 skip_curation="${skip_curation:-}"
@@ -63,7 +67,9 @@ usage() {
     echo "  --min-length N              Filtlong min read length in bp (default: 200)"
     echo "  --min-qscore N              Seqkit min average read quality (default: 7)"
     echo "  --keep-percent N            Filtlong keep percent (default: 90)"
+    echo "  --genome-size SIZE          Override genome size (skip re-estimation)"
     echo "  --subsample-count N         Number of read subsamples (default: 4)"
+    echo "  --min-read-depth N          Min subset read depth for subsampling (default: 25)"
     echo "  --parallel-jobs N           Concurrent assembler jobs (default: 4)"
     echo "  --canu-parallel-jobs N      Concurrent Canu jobs (default: 2)"
     echo "  --skip-curation             Skip manual curation pauses"
@@ -83,7 +89,9 @@ while [[ $# -gt 0 ]]; do
         --min-length)         filtlong_min_length="$2"; shift 2 ;;
         --min-qscore)         min_qscore="$2"; shift 2 ;;
         --keep-percent)       filtlong_keep_percent="$2"; shift 2 ;;
+        --genome-size)        genome_size_override="$2"; shift 2 ;;
         --subsample-count)    subsample_count="$2"; shift 2 ;;
+        --min-read-depth)     min_read_depth="$2"; shift 2 ;;
         --parallel-jobs)      parallel_jobs="$2"; shift 2 ;;
         --canu-parallel-jobs) canu_parallel_jobs="$2"; shift 2 ;;
         --skip-curation)      skip_curation=true; shift ;;
@@ -147,15 +155,20 @@ log_info ">>> CHECK: Compare ${qc_dir}/NanoPlot_FiltPol/ to ${qc_dir}/NanoPlot_s
 log_step "Step 4: Autocycler assembly pipeline"
 
 # --- 4a. Genome size estimation ---
-log_info "4a. Estimating genome size..."
-if [[ -n "${dry_run:-}" ]]; then
-    log_info "[DRY-RUN] autocycler helper genome_size --reads ${filtered_reads} --threads ${threads}"
-    genome_size="DRY_RUN_PLACEHOLDER"
+if [[ -n "${genome_size_override}" ]]; then
+    genome_size="${genome_size_override}"
+    log_info "4a. Using user-provided genome size: ${genome_size}"
 else
-    genome_size=$(autocycler helper genome_size \
-        --reads "${filtered_reads}" --threads "${threads}")
+    log_info "4a. Estimating genome size..."
+    if [[ -n "${dry_run:-}" ]]; then
+        log_info "[DRY-RUN] autocycler helper genome_size --reads ${filtered_reads} --threads ${threads}"
+        genome_size="DRY_RUN_PLACEHOLDER"
+    else
+        genome_size=$(autocycler helper genome_size \
+            --reads "${filtered_reads}" --threads "${threads}")
+    fi
+    log_info "Autocycler genome size: ${genome_size}"
 fi
-log_info "Autocycler genome size: ${genome_size}"
 
 if [[ -f "${genome_size_dir}/lrge_output.txt" ]]; then
     log_info "LRGE estimate: $(cat "${genome_size_dir}/lrge_output.txt")"
@@ -163,11 +176,14 @@ fi
 
 # --- 4b. Subsample reads ---
 log_info "4b. Subsampling reads (count=${subsample_count})..."
-run_cmd autocycler subsample \
-    --reads "${filtered_reads}" \
-    --out_dir subsampled_reads \
-    --genome_size "${genome_size}" \
+subsample_flags=(
+    --reads "${filtered_reads}"
+    --out_dir subsampled_reads
+    --genome_size "${genome_size}"
     --count "${subsample_count}"
+)
+[[ -n "${min_read_depth}" ]] && subsample_flags+=(--min_read_depth "${min_read_depth}")
+run_cmd autocycler subsample "${subsample_flags[@]}"
 
 # --- 4c. Build job lists ---
 log_info "4c. Building assembly job lists..."
