@@ -136,8 +136,16 @@ autocycler_consensus="$(pwd)/autocycler_consensus.fasta"
 
 log_step "Step 2: Filtering reads (min_qscore=${min_qscore}, min_length=${filtlong_min_length}, keep=${filtlong_keep_percent}%)"
 
-run_cmd bash -c 'seqkit seq -Q "$1" "$2" 2>/dev/null | filtlong --min_length "$3" --keep_percent "$4" - | ${GZIP_BIN} > "$5"' \
-    _ "${min_qscore}" "${input_fastq}" "${filtlong_min_length}" "${filtlong_keep_percent}" "${filtered_reads}"
+# Step 2a: Quality-filter with seqkit (temp file needed — filtlong cannot read stdin)
+_qfilt_tmp="$(mktemp --suffix=.fastq)"
+trap 'rm -f "${_qfilt_tmp}"' EXIT
+run_cmd seqkit seq --min-qual "${min_qscore}" "${input_fastq}" -o "${_qfilt_tmp}"
+
+# Step 2b: Length / keep-percent filter with filtlong
+run_cmd bash -c 'filtlong --min_length "$1" --keep_percent "$2" "$3" | ${GZIP_BIN} > "$4"' \
+    _ "${filtlong_min_length}" "${filtlong_keep_percent}" "${_qfilt_tmp}" "${filtered_reads}"
+
+rm -f "${_qfilt_tmp}"
 
 log_info "Running NanoPlot on filtered reads..."
 mkdir -p "${qc_dir}"
