@@ -17,6 +17,8 @@
 #   --min-read-depth N      Min subset read depth for subsampling (default: 25)
 #   --parallel-jobs N       Concurrent assembler jobs (default: 4)
 #   --canu-parallel-jobs N  Concurrent Canu jobs (default: 2)
+#   --trim-mad N            Autocycler trim MAD outlier threshold (default: 5)
+#   --trim-min-identity N   Autocycler trim min alignment identity (default: 0.75)
 #   --skip-curation         Skip manual curation pauses
 #   --dry-run               Print commands without executing
 #   --help                  Show this help
@@ -39,6 +41,8 @@ parallel_jobs="${parallel_jobs:-4}"
 canu_parallel_jobs="${canu_parallel_jobs:-2}"
 skip_curation="${skip_curation:-}"
 canu_extra_args="${canu_extra_args:-}"
+trim_mad="${trim_mad:-}"
+trim_min_identity="${trim_min_identity:-}"
 config_file="${config_file:-}"
 
 # Assembler extra args (associative array — set via config file or before sourcing)
@@ -49,7 +53,6 @@ declare -A assembler_args 2>/dev/null || true
 : "${assembler_args[raven]:=}"
 : "${assembler_args[plassembler]:=}"
 : "${assembler_args[hifiasm]:=}"
-: "${assembler_args[wtdbg2]:=}"
 : "${assembler_args[myloasm]:=}"
 
 # --- Usage -------------------------------------------------------------------
@@ -72,6 +75,8 @@ usage() {
     echo "  --min-read-depth N          Min subset read depth for subsampling (default: 25)"
     echo "  --parallel-jobs N           Concurrent assembler jobs (default: 4)"
     echo "  --canu-parallel-jobs N      Concurrent Canu jobs (default: 2)"
+    echo "  --trim-mad N                Autocycler trim MAD outlier threshold (default: 5)"
+    echo "  --trim-min-identity N       Autocycler trim min alignment identity (default: 0.75)"
     echo "  --skip-curation             Skip manual curation pauses"
     echo "  --dry-run                   Print commands without executing"
     echo "  --help                      Show this help"
@@ -94,6 +99,8 @@ while [[ $# -gt 0 ]]; do
         --min-read-depth)     min_read_depth="$2"; shift 2 ;;
         --parallel-jobs)      parallel_jobs="$2"; shift 2 ;;
         --canu-parallel-jobs) canu_parallel_jobs="$2"; shift 2 ;;
+        --trim-mad)           trim_mad="$2"; shift 2 ;;
+        --trim-min-identity)  trim_min_identity="$2"; shift 2 ;;
         --skip-curation)      skip_curation=true; shift ;;
         --dry-run)            dry_run=true; shift ;;
         --help|-h)            usage ;;
@@ -115,7 +122,7 @@ require_tool autocycler
 require_tool parallel
 
 for tool in canu flye metaMDBG miniasm minipolish minimap2 raven \
-            plassembler hifiasm wtdbg2 wtpoa-cns myloasm \
+            plassembler hifiasm myloasm samtools \
             nucmer mummerplot; do
     command -v "${tool}" &>/dev/null || log_warn "'${tool}' not found — its jobs will fail."
 done
@@ -305,7 +312,7 @@ run_cmd autocycler cluster -a "${autocycler_dir}"
 # ==============================================================================
 
 cluster_advice="CLUSTER SUMMARY:
-$(column -t -s, "${autocycler_dir}/clustering/summary.csv" 2>/dev/null || cat "${autocycler_dir}/clustering/summary.csv" 2>/dev/null || echo "  (summary.csv not found)")
+$(column -t -s$'\t' "${autocycler_dir}/clustering/clustering.tsv" 2>/dev/null || cat "${autocycler_dir}/clustering/clustering.tsv" 2>/dev/null || echo "  (clustering.tsv not found)")
 
 GUIDE:
   Large cluster (~genome size) = chromosome → qc_pass/
@@ -360,9 +367,12 @@ generate_dotplots() {
 
 # --- 4j. Trim & Resolve ---
 log_step "4j. Trim & resolve"
+trim_flags=()
+[[ -n "${trim_mad}" ]]          && trim_flags+=(--mad "${trim_mad}")
+[[ -n "${trim_min_identity}" ]] && trim_flags+=(--min_identity "${trim_min_identity}")
 for c in "${autocycler_dir}"/clustering/qc_pass/cluster_*; do
     log_info "Processing $(basename "$c")..."
-    run_cmd autocycler trim -c "$c"
+    run_cmd autocycler trim -c "$c" "${trim_flags[@]+${trim_flags[@]}}"
     generate_dotplots "$c"
     run_cmd autocycler resolve -c "$c"
 done
@@ -393,10 +403,84 @@ run_cmd autocycler combine -a "${autocycler_dir}" \
 run_cmd cp "${autocycler_dir}/consensus_assembly.fasta" "${autocycler_consensus}"
 
 # --- 4o. Metrics ---
+if [[ -f "subsampled_reads/subsample.yaml" ]]; then
+    run_cmd cp "subsampled_reads/subsample.yaml" .
+fi
+
 run_cmd bash -c 'autocycler table > "$1"' _ metrics.tsv
 run_cmd bash -c 'autocycler table -a "$1" -n "$2" >> "$3"' \
     _ "${autocycler_dir}" "${sample_name}" metrics.tsv
 
+# ==============================================================================
+# STEP 4p — Read-depth assessment
+# ==============================================================================
+
+log_step "4p. Read-depth assessment"
+depth_report="$(pwd)/contig_depths.tsv"
+
+# Map read type to minimap2 preset
+case "${read_type}" in
+    ont_r9|ont_r10)  mm2_preset="map-ont"  ;;
+    pacbio_clr)      mm2_preset="map-pb"   ;;
+    pacbio_hifi)     mm2_preset="map-hifi" ;;
+    *)               mm2_preset="map-ont"  ;;
+esac
+
+log_info "Mapping filtered reads to consensus (preset: ${mm2_preset})..."
+run_cmd bash -c '
+    minimap2 -t "$1" -a -x "$2" "$3" "$4" \
+        | samtools sort -@ "$1" -o consensus_mapped.bam
+' _ "${threads}" "${mm2_preset}" "${autocycler_consensus}" "${filtered_reads}"
+
+run_cmd samtools index consensus_mapped.bam
+
+# Compute per-contig depths and relative depth vs longest contig (chromosome)
+log_info "Computing per-contig depths..."
+run_cmd bash -c '
+    depth_report="$1"
+    echo -e "contig\tlength_bp\tavg_depth\trelative_depth" > "${depth_report}"
+
+    # Collect per-contig average depth
+    samtools depth -a consensus_mapped.bam \
+        | awk '\''{
+            sum[$1] += $3
+            cnt[$1]++
+        }
+        END {
+            # Find the longest contig (chromosome) as reference
+            max_len = 0; chr_name = ""; chr_depth = 1
+            for (c in cnt) {
+                if (cnt[c] > max_len) {
+                    max_len  = cnt[c]
+                    chr_name = c
+                    chr_depth = sum[c] / cnt[c]
+                }
+            }
+            # Output all contigs sorted by length (descending)
+            for (c in cnt) {
+                avg = sum[c] / cnt[c]
+                printf "%s\t%d\t%.1f\t%.2f\n", c, cnt[c], avg, avg / chr_depth
+            }
+        }'\'' \
+        | sort -t$'\''\t'\'' -k2 -rn >> "${depth_report}"
+' _ "${depth_report}"
+
+log_info "Depth report: ${depth_report}"
+
+# Print summary to log
+log_info "--- Contig depth summary ---"
+while IFS=$'\t' read -r contig length avg_depth rel_depth; do
+    if [[ "${contig}" == "contig" ]]; then continue; fi
+    if (( $(echo "${rel_depth} > 1.5" | bc -l 2>/dev/null || echo 0) )); then
+        log_info "  ${contig} (${length} bp): ${avg_depth}× avg, ${rel_depth}× relative ← elevated copy number"
+    else
+        log_info "  ${contig} (${length} bp): ${avg_depth}× avg, ${rel_depth}× relative"
+    fi
+done < "${depth_report}"
+
+run_cmd rm -f consensus_mapped.bam consensus_mapped.bam.bai
+
 log_step "Filtering & assembly complete."
 log_info "Consensus: ${autocycler_consensus}"
 log_info "Metrics:   metrics.tsv"
+log_info "Depths:    ${depth_report}"
