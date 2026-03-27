@@ -89,15 +89,19 @@ reoriented_assembly="$(pwd)/dnaapler_reoriented.fasta"
 log_step "Step 5: Dorado polishing (model=${dorado_model}, min-qscore=${dorado_min_qscore})"
 
 log_info "5a. Re-basecalling with move tables..."
-run_cmd bash -c 'dorado basecaller "$1" "$2" \
-    --emit-moves --min-qscore "$3" \
-    > all_reads_w_moves.bam' \
-    _ "${dorado_model}" "${pod5_dir}" "${dorado_min_qscore}"
+if [[ -s "all_reads_w_moves.bam" ]]; then
+    log_info "Found existing all_reads_w_moves.bam. Skipping Dorado basecalling..."
+else
+    run_cmd bash -c 'dorado basecaller "$1" "$2" \
+        --emit-moves --min-qscore "$3" \
+        > all_reads_w_moves.bam' \
+        _ "${dorado_model}" "${pod5_dir}" "${dorado_min_qscore}"
+fi
 
 # --- Validate Dorado basecalling output ---
 if [[ -z "${dry_run:-}" ]]; then
     log_info "Validating Dorado basecalling output..."
-    if ! samtools quickcheck all_reads_w_moves.bam; then
+    if ! samtools quickcheck -u all_reads_w_moves.bam; then
         log_error "all_reads_w_moves.bam is corrupt or truncated. Dorado may have crashed."
     fi
     read_count=$(samtools view -c all_reads_w_moves.bam)

@@ -126,6 +126,12 @@ if [[ -f "${genome_size_dir}/assembly.fasta" ]]; then
     log_info "Raven assembly size: ${raven_size} bp"
 fi
 
+if [[ -n "${lrge_size:-}" && -n "${raven_size:-}" ]]; then
+    mean_genome_size=$(( (2 * raven_size + lrge_size) / 3 ))
+    echo "${mean_genome_size}" > "${genome_size_dir}/mean_genome_size.txt"
+    log_info "Weighted Mean Genome Size ((2*Raven + LRGE) / 3): ${mean_genome_size} bp"
+fi
+
 log_info "Running Meryl k-mer counting..."
 # Default meryl memory to available system GB if not set
 if [[ -z "${meryl_memory}" ]]; then
@@ -141,5 +147,6 @@ run_cmd bash -c 'meryl histogram "$1" > "$2"' \
 log_step "QC & estimation complete."
 log_info "LRGE estimate:  ${lrge_size:-N/A}"
 log_info "Raven size:     ${raven_size:-N/A} bp"
+log_info "Mean (Weight):  ${mean_genome_size:-N/A} bp"
 log_info "NanoPlot:       ${qc_dir}/"
 log_info "Meryl db:       ${genome_size_dir}/genome.meryl"
