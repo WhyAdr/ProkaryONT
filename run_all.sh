@@ -71,6 +71,7 @@ stage_start=$(date +%s)
 log_step ">>> Stage 1: QC & genome size estimation"
 
 if ! bash "${script_dir}/01_qc_estimate.sh" \
+    --config "${config_file}" \
     --input-fastq "${input_fastq}" \
     --sequencing-summary "${sequencing_summary}" \
     --threads "${threads:-128}" \
@@ -91,6 +92,7 @@ stage_start=$(date +%s)
 log_step ">>> Stage 2: Filtering & assembly"
 
 filter_flags=(
+    --config "${config_file}"
     --input-fastq "${input_fastq}"
     --threads "${threads:-128}"
     --read-type "${read_type:-ont_r10}"
@@ -123,12 +125,14 @@ stage_start=$(date +%s)
 log_step ">>> Stage 3: Polishing & reorientation"
 
 if ! bash "${script_dir}/03_polish_orient.sh" \
+    --config "${config_file}" \
     --assembly autocycler_consensus.fasta \
     --pod5-dir "${pod5_dir}" \
     --threads "${threads:-128}" \
     --sample-name "${sample_name}" \
     --dorado-model "${dorado_model:-sup}" \
     --min-qscore "${dorado_min_qscore:-7}" \
+    ${skip_curation:+--skip-curation} \
     "${common_flags[@]+"${common_flags[@]}"}"; then
     log_error "03_polish_orient.sh failed. Pipeline aborted."
 fi

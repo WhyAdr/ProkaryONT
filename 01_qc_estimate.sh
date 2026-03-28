@@ -86,17 +86,25 @@ genome_size_dir="$(pwd)/02_genome_size"
 log_step "Step 1: NanoPlot QC"
 mkdir -p "${qc_dir}"
 
-log_info "Running NanoPlot on sequencing summary..."
-run_cmd NanoPlot --threads "${threads}" \
-    --summary "${sequencing_summary}" \
-    --loglength \
-    -o "${qc_dir}/run_summary_profile"
+if [[ -f "${qc_dir}/run_summary_profile/NanoPlot-report.html" ]]; then
+    log_info "NanoPlot summary report already exists. Skipping..."
+else
+    log_info "Running NanoPlot on sequencing summary..."
+    run_cmd NanoPlot --threads "${threads}" \
+        --summary "${sequencing_summary}" \
+        --loglength \
+        -o "${qc_dir}/run_summary_profile"
+fi
 
-log_info "Running NanoPlot on raw FASTQ..."
-run_cmd NanoPlot --threads "${threads}" \
-    -c "${nanoplot_color}" --fastq "${input_fastq}" \
-    -o "${qc_dir}/NanoPlot_sample" \
-    --loglength --plots dot --N50
+if [[ -f "${qc_dir}/NanoPlot_sample/NanoPlot-report.html" ]]; then
+    log_info "NanoPlot sample report already exists. Skipping..."
+else
+    log_info "Running NanoPlot on raw FASTQ..."
+    run_cmd NanoPlot --threads "${threads}" \
+        -c "${nanoplot_color}" --fastq "${input_fastq}" \
+        -o "${qc_dir}/NanoPlot_sample" \
+        --loglength --plots dot --N50
+fi
 
 log_info ">>> CHECK: Open ${qc_dir}/NanoPlot_sample/NanoPlot-report.html"
 
@@ -108,18 +116,27 @@ log_step "Step 3: Genome size estimation"
 mkdir -p "${genome_size_dir}"
 
 log_info "Running LRGE..."
-run_cmd bash -c 'lrge -P ont -t "$1" -s 123 "$2" > "$3"' \
-    _ "${threads}" "${input_fastq}" "${genome_size_dir}/lrge_output.txt"
-if [[ -z "${dry_run:-}" && -f "${genome_size_dir}/lrge_output.txt" ]]; then
+if [[ -s "${genome_size_dir}/lrge_output.txt" ]]; then
     lrge_size=$(cat "${genome_size_dir}/lrge_output.txt")
-    log_info "LRGE estimated genome size: ${lrge_size}"
+    log_info "Found existing LRGE estimate: ${lrge_size}. Skipping..."
+else
+    run_cmd bash -c 'lrge -P ont -t "$1" -s 123 "$2" > "$3"' \
+        _ "${threads}" "${input_fastq}" "${genome_size_dir}/lrge_output.txt"
+    if [[ -z "${dry_run:-}" && -f "${genome_size_dir}/lrge_output.txt" ]]; then
+        lrge_size=$(cat "${genome_size_dir}/lrge_output.txt")
+        log_info "LRGE estimated genome size: ${lrge_size}"
+    fi
 fi
 
 log_info "Running Raven quick assembly (0 polish)..."
-run_cmd bash -c 'raven --threads "$1" -p 0 \
-    --graphical-fragment-assembly "$2" \
-    "$3" > "$4"' \
-    _ "${threads}" "${genome_size_dir}/assemblyGraph.gfa" "${input_fastq}" "${genome_size_dir}/assembly.fasta"
+if [[ -s "${genome_size_dir}/assembly.fasta" ]]; then
+    log_info "Found existing Raven assembly. Skipping..."
+else
+    run_cmd bash -c 'raven --threads "$1" -p 0 \
+        --graphical-fragment-assembly "$2" \
+        "$3" > "$4"' \
+        _ "${threads}" "${genome_size_dir}/assemblyGraph.gfa" "${input_fastq}" "${genome_size_dir}/assembly.fasta"
+fi
 
 if [[ -f "${genome_size_dir}/assembly.fasta" ]]; then
     raven_size=$(grep -v '^>' "${genome_size_dir}/assembly.fasta" | tr -d '\n' | wc -c)
@@ -133,15 +150,24 @@ if [[ -n "${lrge_size:-}" && -n "${raven_size:-}" ]]; then
 fi
 
 log_info "Running Meryl k-mer counting..."
-# Default meryl memory to available system GB if not set
 if [[ -z "${meryl_memory}" ]]; then
     meryl_memory=$(free -g 2>/dev/null | awk '/^Mem:/{print $7}')
     meryl_memory="${meryl_memory:-16}"
 fi
-run_cmd meryl count k="${meryl_kmer_size}" memory="${meryl_memory}" threads="${threads}" compress \
-    output "${genome_size_dir}/genome.meryl" "${input_fastq}"
-run_cmd bash -c 'meryl histogram "$1" > "$2"' \
-    _ "${genome_size_dir}/genome.meryl" "${genome_size_dir}/genome.hist"
+
+if [[ -d "${genome_size_dir}/genome.meryl" ]]; then
+    log_info "Found existing Meryl database. Skipping k-mer counting..."
+else
+    run_cmd meryl count k="${meryl_kmer_size}" memory="${meryl_memory}" threads="${threads}" compress \
+        output "${genome_size_dir}/genome.meryl" "${input_fastq}"
+fi
+
+if [[ -d "${genome_size_dir}/genome.meryl" && ! -f "${genome_size_dir}/genome.hist" ]]; then
+    run_cmd bash -c 'meryl histogram "$1" > "$2"' \
+        _ "${genome_size_dir}/genome.meryl" "${genome_size_dir}/genome.hist"
+else
+    log_info "Meryl histogram already exists. Skipping..."
+fi
 
 # --- Summary -----------------------------------------------------------------
 log_step "QC & estimation complete."

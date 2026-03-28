@@ -172,16 +172,25 @@ else
 
 log_step "Step 2: Filtering reads (min_qscore=${min_qscore}, min_length=${filtlong_min_length}, keep=${filtlong_keep_percent}%)"
 
-# Step 2a: Quality-filter with seqkit (temp file needed — filtlong cannot read stdin)
-_qfilt_tmp="$(mktemp --suffix=.fastq)"
-trap 'rm -f "${_qfilt_tmp}"' EXIT
-run_cmd seqkit seq --min-qual "${min_qscore}" "${input_fastq}" -o "${_qfilt_tmp}"
+if [[ -s "${filtered_reads}" ]] && gzip -t "${filtered_reads}" 2>/dev/null; then
+    log_info "Found valid existing ${filtered_reads}. Skipping filtering..."
+else
+    if [[ -f "${filtered_reads}" ]]; then
+        log_warn "Existing filtered reads are incomplete or corrupt. Overwriting..."
+        rm -f "${filtered_reads}"
+    fi
 
-# Step 2b: Length / keep-percent filter with filtlong
-run_cmd bash -c 'filtlong --min_length "$1" --keep_percent "$2" "$3" | ${GZIP_BIN} > "$4"' \
-    _ "${filtlong_min_length}" "${filtlong_keep_percent}" "${_qfilt_tmp}" "${filtered_reads}"
+    # Step 2a: Quality-filter with seqkit (temp file needed — filtlong cannot read stdin)
+    _qfilt_tmp="$(mktemp --suffix=.fastq)"
+    trap 'rm -f "${_qfilt_tmp}"' EXIT
+    run_cmd seqkit seq --min-qual "${min_qscore}" "${input_fastq}" -o "${_qfilt_tmp}"
 
-rm -f "${_qfilt_tmp}"
+    # Step 2b: Length / keep-percent filter with filtlong
+    run_cmd bash -c 'filtlong --min_length "$1" --keep_percent "$2" "$3" | ${GZIP_BIN} > "$4"' \
+        _ "${filtlong_min_length}" "${filtlong_keep_percent}" "${_qfilt_tmp}" "${filtered_reads}"
+
+    rm -f "${_qfilt_tmp}"
+fi
 
 log_info "Running NanoPlot on filtered reads..."
 mkdir -p "${qc_dir}"
@@ -233,9 +242,12 @@ subsample_flags=(
 run_cmd autocycler subsample "${subsample_flags[@]}"
 
 # --- 4c. Build job lists ---
-log_info "4c. Building assembly job lists..."
-mkdir -p "${assemblies_dir}"
-rm -f "${assemblies_dir}/jobs.txt" "${assemblies_dir}/jobs_canu.txt"
+if [[ -f "${assemblies_dir}/joblog.tsv" || -f "${assemblies_dir}/joblog_canu.tsv" ]]; then
+    log_info "4c. Existing joblogs found. Reusing job lists for --resume..."
+else
+    log_info "4c. Building assembly job lists..."
+    mkdir -p "${assemblies_dir}"
+    rm -f "${assemblies_dir}/jobs.txt" "${assemblies_dir}/jobs_canu.txt"
 
 for assembler in $(echo "${assembler_list}" | tr ',' '\n' | tr -d ' ' | grep -v 'canu' | sort); do
     extra="${assembler_args[$assembler]:-}"
@@ -253,6 +265,7 @@ for i in $(seq -f "%02g" 1 "${subsample_count}"); do
 done
 
 log_info "Jobs: $(wc -l < "${assemblies_dir}/jobs.txt" 2>/dev/null || echo 0) general, $(wc -l < "${assemblies_dir}/jobs_canu.txt" 2>/dev/null || echo 0) Canu"
+fi # End joblog guard
 
 # --- 4d. Run assemblies ---
 log_step "4d. Running assemblies..."
@@ -262,6 +275,7 @@ if [[ -f "${assemblies_dir}/jobs_canu.txt" && -s "${assemblies_dir}/jobs_canu.tx
     set +e
     run_cmd nice -n 19 parallel --bar --jobs "${canu_parallel_jobs}" \
         --joblog "${assemblies_dir}/joblog_canu.tsv" \
+        --resume --resume-failed \
         --results "${assemblies_dir}/logs" --timeout 16h \
         < "${assemblies_dir}/jobs_canu.txt"
     parallel_exit_canu=$?
@@ -284,6 +298,7 @@ if [[ -f "${assemblies_dir}/jobs.txt" && -s "${assemblies_dir}/jobs.txt" ]]; the
     set +e
     run_cmd nice -n 19 parallel --bar --jobs "${parallel_jobs}" \
         --joblog "${assemblies_dir}/joblog.tsv" \
+        --resume --resume-failed \
         --results "${assemblies_dir}/logs" --timeout 8h \
         < "${assemblies_dir}/jobs.txt"
     parallel_exit_general=$?
@@ -519,67 +534,73 @@ sed -i "2 s/^/${in_count}\t${in_bases}\t${in_n50}\t/" metrics.tsv
 log_step "4p. Read-depth assessment"
 depth_report="$(pwd)/contig_depths.tsv"
 
-# Map read type to minimap2 preset
-case "${read_type}" in
-    ont_r9|ont_r10)  mm2_preset="map-ont"  ;;
-    pacbio_clr)      mm2_preset="map-pb"   ;;
-    pacbio_hifi)     mm2_preset="map-hifi" ;;
-    *)               mm2_preset="map-ont"  ;;
-esac
+if [[ -s "${depth_report}" ]]; then
+    log_info "Found existing depth report. Skipping read-depth assessment..."
+else
+    # Map read type to minimap2 preset
+    case "${read_type}" in
+        ont_r9|ont_r10)  mm2_preset="map-ont"  ;;
+        pacbio_clr)      mm2_preset="map-pb"   ;;
+        pacbio_hifi)     mm2_preset="map-hifi" ;;
+        *)               mm2_preset="map-ont"  ;;
+    esac
 
-log_info "Mapping filtered reads to consensus (preset: ${mm2_preset})..."
-run_cmd bash -c '
-    minimap2 -t "$1" -a -x "$2" "$3" "$4" \
-        | samtools sort -@ "$1" -o consensus_mapped.bam
-' _ "${threads}" "${mm2_preset}" "${autocycler_consensus}" "${filtered_reads}"
+    log_info "Mapping filtered reads to consensus (preset: ${mm2_preset})..."
+    run_cmd bash -c '
+        minimap2 -t "$1" -a -x "$2" "$3" "$4" \
+            | samtools sort -@ "$1" -o consensus_mapped.bam
+    ' _ "${threads}" "${mm2_preset}" "${autocycler_consensus}" "${filtered_reads}"
 
-run_cmd samtools index consensus_mapped.bam
+    run_cmd samtools index consensus_mapped.bam
 
-# Compute per-contig depths and relative depth vs longest contig (chromosome)
-log_info "Computing per-contig depths..."
-run_cmd bash -c '
-    depth_report="$1"
-    echo -e "contig\tlength_bp\tavg_depth\trelative_depth" > "${depth_report}"
+    # Compute per-contig depths and relative depth vs longest contig (chromosome)
+    log_info "Computing per-contig depths..."
+    run_cmd bash -c '
+        depth_report="$1"
+        echo -e "contig\tlength_bp\tavg_depth\trelative_depth" > "${depth_report}"
 
-    # Collect per-contig average depth
-    samtools depth -a consensus_mapped.bam \
-        | awk '\''{
-            sum[$1] += $3
-            cnt[$1]++
-        }
-        END {
-            # Find the longest contig (chromosome) as reference
-            max_len = 0; chr_name = ""; chr_depth = 1
-            for (c in cnt) {
-                if (cnt[c] > max_len) {
-                    max_len  = cnt[c]
-                    chr_name = c
-                    chr_depth = sum[c] / cnt[c]
+        # Collect per-contig average depth
+        samtools depth -a consensus_mapped.bam \
+            | awk '\''{
+                sum[$1] += $3
+                cnt[$1]++
+            }
+            END {
+                # Find the longest contig (chromosome) as reference
+                max_len = 0; chr_name = ""; chr_depth = 1
+                for (c in cnt) {
+                    if (cnt[c] > max_len) {
+                        max_len  = cnt[c]
+                        chr_name = c
+                        chr_depth = sum[c] / cnt[c]
+                    }
                 }
-            }
-            # Output all contigs sorted by length (descending)
-            for (c in cnt) {
-                avg = sum[c] / cnt[c]
-                printf "%s\t%d\t%.1f\t%.2f\n", c, cnt[c], avg, avg / chr_depth
-            }
-        }'\'' \
-        | sort -t$'\''\t'\'' -k2 -rn >> "${depth_report}"
-' _ "${depth_report}"
+                # Output all contigs sorted by length (descending)
+                for (c in cnt) {
+                    avg = sum[c] / cnt[c]
+                    printf "%s\t%d\t%.1f\t%.2f\n", c, cnt[c], avg, avg / chr_depth
+                }
+            }'\'' \
+            | sort -t$'\''\t'\'' -k2 -rn >> "${depth_report}"
+    ' _ "${depth_report}"
 
-log_info "Depth report: ${depth_report}"
+    log_info "Depth report: ${depth_report}"
 
-# Print summary to log
-log_info "--- Contig depth summary ---"
-while IFS=$'\t' read -r contig length avg_depth rel_depth; do
-    if [[ "${contig}" == "contig" ]]; then continue; fi
-    if (( $(echo "${rel_depth} > 1.5" | bc -l 2>/dev/null || echo 0) )); then
-        log_info "  ${contig} (${length} bp): ${avg_depth}× avg, ${rel_depth}× relative ← elevated copy number"
-    else
-        log_info "  ${contig} (${length} bp): ${avg_depth}× avg, ${rel_depth}× relative"
-    fi
-done < "${depth_report}"
+    run_cmd rm -f consensus_mapped.bam consensus_mapped.bam.bai
+fi
 
-run_cmd rm -f consensus_mapped.bam consensus_mapped.bam.bai
+# Print summary to log (always, even on resume)
+if [[ -f "${depth_report}" ]]; then
+    log_info "--- Contig depth summary ---"
+    while IFS=$'\t' read -r contig length avg_depth rel_depth; do
+        if [[ "${contig}" == "contig" ]]; then continue; fi
+        if (( $(echo "${rel_depth} > 1.5" | bc -l 2>/dev/null || echo 0) )); then
+            log_info "  ${contig} (${length} bp): ${avg_depth}× avg, ${rel_depth}× relative ← elevated copy number"
+        else
+            log_info "  ${contig} (${length} bp): ${avg_depth}× avg, ${rel_depth}× relative"
+        fi
+    done < "${depth_report}"
+fi
 
 log_step "Filtering & assembly complete."
 log_info "Consensus: ${autocycler_consensus}"
