@@ -1,0 +1,41 @@
+# Pipeline runtime outputs
+pipeline.log
+*.bam
+*.bam.bai
+*.fastq
+*.fastq.gz
+*.fasta
+*.gfa
+*.meryl/
+*.hist
+*.tsv
+*.yaml
+
+# NanoPlot outputs
+01_qc/
+02_genome_size/
+
+# Assembly intermediates
+assemblies/
+autocycler_out/
+subsampled_reads/
+ragtag_output/
+dnaapler_out/
+
+# Polishing intermediates
+polished_assembly.fasta
+dnaapler_reoriented.fasta
+autocycler_consensus.fasta
+consensus_mapped.bam*
+contig_depths.tsv
+metrics.tsv
+subsample.yaml
+
+# Checkpoints
+.success_*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+*~

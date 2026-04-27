@@ -1,0 +1,625 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# 02_filter_assemble.sh — Read filtering & Autocycler assembly pipeline
+# ==============================================================================
+# Usage:
+#   bash 02_filter_assemble.sh --input-fastq reads.fq.gz --read-type ont_r10
+#
+# Optional flags:
+#   --config FILE           Path to pipeline.conf (values override defaults)
+#   --threads N             Number of threads (default: 128)
+#   --sample-name NAME      Sample name for metrics (default: MyBacteria)
+#   --min-length N          Filtlong minimum read length (default: 200)
+#   --min-qscore N          Seqkit minimum average read quality (default: 7)
+#   --keep-percent N        Filtlong keep percent (default: 90)
+#   --genome-size SIZE      Override genome size (skip re-estimation)
+#   --subsample-count N     Number of read subsamples (default: 4)
+#   --min-read-depth N      Min subset read depth for subsampling (default: 25)
+#   --parallel-jobs N       Concurrent assembler jobs (default: 4)
+#   --canu-parallel-jobs N  Concurrent Canu jobs (default: 2)
+#   --trim-mad N            Autocycler trim MAD outlier threshold (default: 5)
+#   --trim-min-identity N   Autocycler trim min alignment identity (default: 0.75)
+#   --skip-curation         Skip manual curation pauses
+#   --dry-run               Print commands without executing
+#   --help                  Show this help
+# ==============================================================================
+
+source "$(dirname "$0")/00_setup.sh"
+
+# --- Defaults ----------------------------------------------------------------
+threads="${threads:-128}"
+input_fastq="${input_fastq:-}"
+read_type="${read_type:-ont_r10}"
+sample_name="${sample_name:-MyBacteria}"
+filtlong_min_length="${filtlong_min_length:-200}"
+min_qscore="${min_qscore:-7}"
+filtlong_keep_percent="${filtlong_keep_percent:-90}"
+genome_size_override="${genome_size_override:-}"
+subsample_count="${subsample_count:-4}"
+min_read_depth="${min_read_depth:-}"
+parallel_jobs="${parallel_jobs:-4}"
+canu_parallel_jobs="${canu_parallel_jobs:-2}"
+skip_curation="${skip_curation:-}"
+canu_extra_args="${canu_extra_args:-}"
+trim_mad="${trim_mad:-}"
+trim_min_identity="${trim_min_identity:-}"
+config_file="${config_file:-}"
+
+# Assembler extra args (associative array — set via config file or before sourcing)
+declare -A assembler_args 2>/dev/null || true
+: "${assembler_args[flye]:=}"
+: "${assembler_args[metamdbg]:=}"
+: "${assembler_args[miniasm]:=}"
+: "${assembler_args[raven]:=}"
+: "${assembler_args[plassembler]:=}"
+: "${assembler_args[hifiasm]:=}"
+: "${assembler_args[myloasm]:=}"
+: "${assembler_args[nextdenovo]:=}"
+: "${assembler_args[wtdbg2]:=}"
+
+assembler_list="flye, canu, hifiasm, raven, miniasm, metamdbg, myloasm, plassembler, nextdenovo, wtdbg2"
+if [[ -n "${PROKARYONT_ASSEMBLERS:-}" ]]; then
+    assembler_list="${PROKARYONT_ASSEMBLERS}"
+fi
+
+# --- Usage -------------------------------------------------------------------
+usage() {
+    echo "Usage: $(basename "$0") --input-fastq FILE [OPTIONS]"
+    echo ""
+    echo "Required:"
+    echo "  --input-fastq FILE          Raw FASTQ file (gzipped ok)"
+    echo ""
+    echo "Optional:"
+    echo "  --config FILE               Path to pipeline.conf"
+    echo "  --read-type TYPE            Read type: ont_r9|ont_r10|pacbio_clr|pacbio_hifi (default: ont_r10)"
+    echo "  --threads N                 Number of threads (default: 128)"
+    echo "  --sample-name NAME          Sample name for metrics (default: MyBacteria)"
+    echo "  --min-length N              Filtlong min read length in bp (default: 200)"
+    echo "  --min-qscore N              Seqkit min average read quality (default: 7)"
+    echo "  --keep-percent N            Filtlong keep percent (default: 90)"
+    echo "  --genome-size SIZE          Override genome size (skip re-estimation)"
+    echo "  --subsample-count N         Number of read subsamples (default: 4)"
+    echo "  --min-read-depth N          Min subset read depth for subsampling (default: 25)"
+    echo "  --parallel-jobs N           Concurrent assembler jobs (default: 4)"
+    echo "  --canu-parallel-jobs N      Concurrent Canu jobs (default: 2)"
+    echo "  --trim-mad N                Autocycler trim MAD outlier threshold (default: 5)"
+    echo "  --trim-min-identity N       Autocycler trim min alignment identity (default: 0.75)"
+    echo "  --skip-curation             Skip manual curation pauses"
+    echo "  --dry-run                   Print commands without executing"
+    echo "  --help                      Show this help"
+    exit 0
+}
+
+# --- Parse arguments ---------------------------------------------------------
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --input-fastq)        input_fastq="$2"; shift 2 ;;
+        --read-type)          read_type="$2"; shift 2 ;;
+        --config)             config_file="$2"; shift 2 ;;
+        --threads)            threads="$2"; shift 2 ;;
+        --sample-name)        sample_name="$2"; shift 2 ;;
+        --min-length)         filtlong_min_length="$2"; shift 2 ;;
+        --min-qscore)         min_qscore="$2"; shift 2 ;;
+        --keep-percent)       filtlong_keep_percent="$2"; shift 2 ;;
+        --genome-size)        genome_size_override="$2"; shift 2 ;;
+        --subsample-count)    subsample_count="$2"; shift 2 ;;
+        --min-read-depth)     min_read_depth="$2"; shift 2 ;;
+        --parallel-jobs)      parallel_jobs="$2"; shift 2 ;;
+        --canu-parallel-jobs) canu_parallel_jobs="$2"; shift 2 ;;
+        --trim-mad)           trim_mad="$2"; shift 2 ;;
+        --trim-min-identity)  trim_min_identity="$2"; shift 2 ;;
+        --skip-curation)      skip_curation=true; shift ;;
+        --dry-run)            dry_run=true; shift ;;
+        --help|-h)            usage ;;
+        *) log_error "Unknown flag: $1. Use --help for usage." ;;
+    esac
+done
+
+# --- Load config (CLI flags parsed above take priority) ----------------------
+[[ -n "${config_file}" ]] && load_config "${config_file}"
+
+# --- Validate ----------------------------------------------------------------
+require_arg "--input-fastq" "${input_fastq}"
+require_file "${input_fastq}" ""
+
+require_tool filtlong
+require_tool seqkit
+require_tool NanoPlot
+require_tool autocycler
+require_tool parallel
+
+for tool in canu flye metaMDBG miniasm minipolish minimap2 raven \
+            plassembler hifiasm myloasm nextdenovo wtdbg2 samtools \
+            nucmer mummerplot; do
+    command -v "${tool}" &>/dev/null || log_warn "'${tool}' not found — its jobs will fail."
+done
+
+# --- Derived values ----------------------------------------------------------
+threads_per_job=$(( threads / parallel_jobs ))
+canu_threads_per_job=$(( threads / canu_parallel_jobs ))
+qc_dir="$(pwd)/01_qc"
+genome_size_dir="$(pwd)/02_genome_size"
+assemblies_dir="$(pwd)/assemblies"
+autocycler_dir="$(pwd)/autocycler_out"
+filtered_reads="$(pwd)/filtered_input.fastq.gz"
+autocycler_consensus="$(pwd)/autocycler_consensus.fasta"
+
+# ==============================================================================
+# STEP 2 — Filtering with Filtlong
+# ==============================================================================
+
+# --- Resume logic: recover saved state when skipping early stages ---
+_resume_target="${PROKARYONT_RESUME:-}"
+if [[ "${_resume_target}" == "cluster" || "${_resume_target}" == "trim" || "${_resume_target}" == "dnaapler" ]]; then
+    log_info ">>> RESUME from '${_resume_target}' requested — skipping completed stages"
+
+    # Recover genome_size: prefer override > mean file > autocycler fallback
+    if [[ -n "${genome_size_override}" ]]; then
+        genome_size="${genome_size_override}"
+    elif [[ -f "${genome_size_dir}/mean_genome_size.txt" ]]; then
+        genome_size=$(cat "${genome_size_dir}/mean_genome_size.txt")
+    else
+        genome_size=$(autocycler helper genome_size \
+            --reads "${filtered_reads}" --threads "${threads}")
+    fi
+    log_info "Recovered genome_size=${genome_size} for resume"
+
+    # Verify filtered reads exist (needed for depth assessment later)
+    if [[ ! -f "${filtered_reads}" ]]; then
+        log_error "Cannot resume: filtered reads not found at ${filtered_reads}. Re-run without --resume-from."
+    fi
+else
+
+log_step "Step 2: Filtering reads (min_qscore=${min_qscore}, min_length=${filtlong_min_length}, keep=${filtlong_keep_percent}%)"
+
+if [[ -s "${filtered_reads}" ]] && gzip -t "${filtered_reads}" 2>/dev/null; then
+    log_info "Found valid existing ${filtered_reads}. Skipping filtering..."
+else
+    if [[ -f "${filtered_reads}" ]]; then
+        log_warn "Existing filtered reads are incomplete or corrupt. Overwriting..."
+        rm -f "${filtered_reads}"
+    fi
+
+    # Step 2a: Quality-filter with seqkit (temp file needed — filtlong cannot read stdin)
+    _qfilt_tmp="$(mktemp --suffix=.fastq)"
+    trap 'rm -f "${_qfilt_tmp}"' EXIT
+    run_cmd seqkit seq --min-qual "${min_qscore}" "${input_fastq}" -o "${_qfilt_tmp}"
+
+    # Step 2b: Length / keep-percent filter with filtlong
+    run_cmd bash -c 'filtlong --min_length "$1" --keep_percent "$2" "$3" | ${GZIP_BIN} > "$4"' \
+        _ "${filtlong_min_length}" "${filtlong_keep_percent}" "${_qfilt_tmp}" "${filtered_reads}"
+
+    rm -f "${_qfilt_tmp}"
+fi
+
+log_info "Running NanoPlot on filtered reads..."
+mkdir -p "${qc_dir}"
+run_cmd NanoPlot --threads "${threads}" -c green \
+    --fastq "${filtered_reads}" \
+    -o "${qc_dir}/NanoPlot_FiltPol" \
+    --loglength --plots dot --N50
+
+log_info ">>> CHECK: Compare ${qc_dir}/NanoPlot_FiltPol/ to ${qc_dir}/NanoPlot_sample/"
+
+# ==============================================================================
+# STEP 4 — Autocycler Assembly
+# ==============================================================================
+
+log_step "Step 4: Autocycler assembly pipeline"
+
+# --- 4a. Genome size estimation ---
+if [[ -n "${genome_size_override}" ]]; then
+    genome_size="${genome_size_override}"
+    log_info "4a. Using user-provided genome size: ${genome_size}"
+elif [[ -f "${genome_size_dir}/mean_genome_size.txt" ]]; then
+    genome_size=$(cat "${genome_size_dir}/mean_genome_size.txt")
+    log_info "4a. Using weighted mean genome size from QC step: ${genome_size}"
+else
+    log_info "4a. Estimating genome size..."
+    if [[ -n "${dry_run:-}" ]]; then
+        log_info "[DRY-RUN] autocycler helper genome_size --reads ${filtered_reads} --threads ${threads}"
+        genome_size="DRY_RUN_PLACEHOLDER"
+    else
+        genome_size=$(autocycler helper genome_size \
+            --reads "${filtered_reads}" --threads "${threads}")
+    fi
+    log_info "Autocycler genome size: ${genome_size}"
+fi
+
+if [[ -f "${genome_size_dir}/lrge_output.txt" ]]; then
+    log_info "LRGE estimate: $(cat "${genome_size_dir}/lrge_output.txt")"
+fi
+
+# --- 4b. Subsample reads ---
+log_info "4b. Subsampling reads (count=${subsample_count})..."
+subsample_flags=(
+    --reads "${filtered_reads}"
+    --out_dir subsampled_reads
+    --genome_size "${genome_size}"
+    --count "${subsample_count}"
+)
+[[ -n "${min_read_depth}" ]] && subsample_flags+=(--min_read_depth "${min_read_depth}")
+run_cmd autocycler subsample "${subsample_flags[@]}"
+
+# --- 4c. Build job lists ---
+if [[ -f "${assemblies_dir}/joblog.tsv" || -f "${assemblies_dir}/joblog_canu.tsv" ]]; then
+    log_info "4c. Existing joblogs found. Reusing job lists for --resume..."
+else
+    log_info "4c. Building assembly job lists..."
+    mkdir -p "${assemblies_dir}"
+    rm -f "${assemblies_dir}/jobs.txt" "${assemblies_dir}/jobs_canu.txt"
+
+for assembler in $(echo "${assembler_list}" | tr ',' '\n' | tr -d ' ' | grep -v 'canu' | sort); do
+    extra="${assembler_args[$assembler]:-}"
+    for i in $(seq -f "%02g" 1 "${subsample_count}"); do
+        cmd="autocycler helper ${assembler} --reads subsampled_reads/sample_${i}.fastq --out_prefix ${assemblies_dir}/${assembler}_${i} --threads ${threads_per_job} --genome_size ${genome_size} --read_type ${read_type} --min_depth_rel 0.1"
+        [[ -n "${extra}" ]] && cmd+=" -- ${extra}"
+        echo "${cmd}" >> "${assemblies_dir}/jobs.txt"
+    done
+done
+
+for i in $(seq -f "%02g" 1 "${subsample_count}"); do
+    cmd="autocycler helper canu --reads subsampled_reads/sample_${i}.fastq --out_prefix ${assemblies_dir}/canu_${i} --threads ${canu_threads_per_job} --genome_size ${genome_size} --read_type ${read_type} --min_depth_rel 0.1"
+    [[ -n "${canu_extra_args}" ]] && cmd+=" -- ${canu_extra_args}"
+    echo "${cmd}" >> "${assemblies_dir}/jobs_canu.txt"
+done
+
+log_info "Jobs: $(wc -l < "${assemblies_dir}/jobs.txt" 2>/dev/null || echo 0) general, $(wc -l < "${assemblies_dir}/jobs_canu.txt" 2>/dev/null || echo 0) Canu"
+fi # End joblog guard
+
+# --- 4d. Run assemblies ---
+log_step "4d. Running assemblies..."
+
+if [[ -f "${assemblies_dir}/jobs_canu.txt" && -s "${assemblies_dir}/jobs_canu.txt" ]]; then
+    log_info "Running Canu (${canu_parallel_jobs} jobs × ${canu_threads_per_job} threads)..."
+    set +e
+    run_cmd nice -n 19 parallel --bar --jobs "${canu_parallel_jobs}" \
+        --joblog "${assemblies_dir}/joblog_canu.tsv" \
+        --resume --resume-failed \
+        --results "${assemblies_dir}/logs" --timeout 16h \
+        < "${assemblies_dir}/jobs_canu.txt"
+    parallel_exit_canu=$?
+    set -e
+else
+    parallel_exit_canu=0
+fi
+
+if [[ ${parallel_exit_canu} -ne 0 ]]; then
+    if [[ ${parallel_exit_canu} -ge 1 && ${parallel_exit_canu} -le 254 ]]; then
+        log_warn "${parallel_exit_canu} Canu job(s) failed. Surviving assemblies will continue downstream."
+        awk -F'\t' 'NR>1 && $7!=0 {print "  -> Failed: " $9}' "${assemblies_dir}/joblog_canu.tsv" >&2
+    else
+        log_error "GNU parallel failed catastrophically (exit code ${parallel_exit_canu}). Aborting."
+    fi
+fi
+
+if [[ -f "${assemblies_dir}/jobs.txt" && -s "${assemblies_dir}/jobs.txt" ]]; then
+    log_info "Running general assemblers (${parallel_jobs} jobs × ${threads_per_job} threads)..."
+    set +e
+    run_cmd nice -n 19 parallel --bar --jobs "${parallel_jobs}" \
+        --joblog "${assemblies_dir}/joblog.tsv" \
+        --resume --resume-failed \
+        --results "${assemblies_dir}/logs" --timeout 8h \
+        < "${assemblies_dir}/jobs.txt"
+    parallel_exit_general=$?
+    set -e
+else
+    parallel_exit_general=0
+fi
+
+if [[ ${parallel_exit_general} -ne 0 ]]; then
+    if [[ ${parallel_exit_general} -ge 1 && ${parallel_exit_general} -le 254 ]]; then
+        log_warn "${parallel_exit_general} general assembler job(s) failed. Surviving assemblies will continue downstream."
+        awk -F'\t' 'NR>1 && $7!=0 {print "  -> Failed: " $9}' "${assemblies_dir}/joblog.tsv" >&2
+    else
+        log_error "GNU parallel failed catastrophically (exit code ${parallel_exit_general}). Aborting."
+    fi
+fi
+
+# --- 4e. Apply weighting ---
+log_info "4e. Applying Autocycler weighting..."
+shopt -s nullglob
+tmp_weight=$(mktemp)
+for f in "${assemblies_dir}"/plassembler*.fasta; do
+    sed '/Autocycler_cluster_weight=/! s/circular=[Tt][Rr][Uu][Ee]/circular=True Autocycler_cluster_weight=3/I' "$f" > "$tmp_weight" && mv "$tmp_weight" "$f"
+done
+for f in "${assemblies_dir}"/canu*.fasta "${assemblies_dir}"/flye*.fasta "${assemblies_dir}"/hifiasm*.fasta; do
+    sed '/Autocycler_consensus_weight=/! s/^>.*$/& Autocycler_consensus_weight=2/' "$f" > "$tmp_weight" && mv "$tmp_weight" "$f"
+done
+run_cmd rm -f "$tmp_weight"
+shopt -u nullglob
+
+# --- 4f. Cleanup ---
+run_cmd rm -f subsampled_reads/*.fastq
+
+# ==============================================================================
+# CURATION POINT 1 — Inspect assemblies
+# ==============================================================================
+
+failed_canu=$(awk -F'\t' 'NR>1 && $7!=0' "${assemblies_dir}/joblog_canu.tsv" 2>/dev/null | wc -l)
+failed_general=$(awk -F'\t' 'NR>1 && $7!=0' "${assemblies_dir}/joblog.tsv" 2>/dev/null | wc -l)
+empty_count=$(find "${assemblies_dir}" -name "*.fasta" -size 0 2>/dev/null | wc -l)
+
+advice="DIAGNOSTICS:
+  Failed jobs: Canu=${failed_canu}, General=${failed_general}
+  Empty FASTA files: ${empty_count}
+
+  Assembly sizes:"
+
+for f in "${assemblies_dir}"/*.fasta; do
+    [[ -f "$f" ]] && advice+="
+    $(basename "$f"): $(grep -v '^>' "$f" | tr -d '\n' | wc -c) bp"
+done
+
+advice+="
+
+ACTION: Delete empty or broken FASTA files, then continue."
+
+manual_curation_pause "Inspect assemblies before clustering" "${advice}"
+touch .success_assembly
+fi # End resume skip for filter+assemble stages
+
+if [[ "${_resume_target}" != "trim" && "${_resume_target}" != "dnaapler" ]]; then
+
+# --- 4h. Compress & Cluster ---
+log_step "4h. Compress & cluster"
+run_cmd autocycler compress -i "${assemblies_dir}" -a "${autocycler_dir}"
+run_cmd autocycler cluster -a "${autocycler_dir}"
+
+if [[ -f "${autocycler_dir}/clustering/clustering.newick" ]]; then
+    log_info "Running ETE3 sanity checks on clustering tree..."
+    _ete3_script=$(mktemp /tmp/parse_tree_XXXXXX.py)
+    cat << 'PYEOF' > "${_ete3_script}"
+import sys, re
+try:
+    from ete3 import Tree
+    tree_file = sys.argv[1]
+    t = Tree(tree_file)
+
+    # Compute median branch length for a data-driven outlier threshold
+    dists = sorted([n.dist for n in t.traverse() if not n.is_root() and n.dist > 0])
+    if dists:
+        median_dist = dists[len(dists) // 2]
+        outlier_threshold = median_dist * 5  # 5× median as outlier cutoff
+    else:
+        outlier_threshold = float('inf')
+
+    for node in t.traverse("postorder"):
+        if not node.is_leaf() and node.dist > outlier_threshold:
+            print(f"WARNING: High branch length ({node.dist:.4f}) exceeds "
+                  f"5× median ({median_dist:.4f}) — potential outlier cluster.",
+                  file=sys.stderr)
+        if not node.is_leaf() and len(node.get_leaves()) > 3:
+            # Extract assembler name: everything before the last _NN suffix
+            assemblers = [re.sub(r'_\d+$', '', l.name) for l in node.get_leaves()]
+            if len(set(assemblers)) == 1:
+                print(f"WARNING: Clade with {len(assemblers)} leaves all from "
+                      f"assembler '{assemblers[0]}' — possible miscluster.",
+                      file=sys.stderr)
+except ImportError:
+    print("ETE3 not installed — skipping cluster sanity check.", file=sys.stderr)
+except Exception as e:
+    print(f"ETE3 parsing error: {e}", file=sys.stderr)
+PYEOF
+    python3 "${_ete3_script}" "${autocycler_dir}/clustering/clustering.newick" || true
+    rm -f "${_ete3_script}"
+fi
+
+# ==============================================================================
+# CURATION POINT 2 — Inspect clustering
+# ==============================================================================
+
+cluster_advice="CLUSTER SUMMARY:
+$(column -t -s$'\t' "${autocycler_dir}/clustering/clustering.tsv" 2>/dev/null || cat "${autocycler_dir}/clustering/clustering.tsv" 2>/dev/null || echo "  (clustering.tsv not found)")
+
+GUIDE:
+  Large cluster (~genome size) = chromosome → qc_pass/
+  Small clusters (1-200 kb)    = plasmids   → qc_pass/
+  Tiny clusters (<500 bp)      = noise      → qc_fail/
+  
+  Bandage integration: If enabled, load GFAs in ${autocycler_dir}/clustering/qc_pass/*/1_untrimmed.gfa to inspect nodes.
+
+ACTION: Move misclassified clusters between qc_pass/ and qc_fail/, then continue."
+
+manual_curation_pause "Inspect clustering results" "${cluster_advice}"
+touch .success_cluster
+fi # End resume skip for cluster stage
+
+# --- Hybrid dotplot function ---
+# Small clusters (< 2 MB GFA): Autocycler dotplot (fast, all-vs-all pairwise)
+# Large clusters (>= 2 MB GFA): MUMmer nucmer + mummerplot (chromosome-scale)
+generate_dotplots() {
+    local cluster_dir="$1"
+    local gfa_untrimmed="${cluster_dir}/1_untrimmed.gfa"
+    local gfa_trimmed="${cluster_dir}/2_trimmed.gfa"
+    local gfa_size
+    gfa_size=$(wc -c < "${gfa_untrimmed}")
+
+    if [[ ${gfa_size} -lt 2000000 ]]; then
+        # Plasmid-scale: Autocycler dotplot (purpose-built for trim verification)
+        log_info "  Small cluster — using Autocycler dotplot"
+        run_cmd autocycler dotplot -i "${gfa_untrimmed}" -o "${cluster_dir}/1_untrimmed.png"
+        run_cmd autocycler dotplot -i "${gfa_trimmed}"   -o "${cluster_dir}/2_trimmed.png"
+    elif command -v nucmer &>/dev/null && command -v mummerplot &>/dev/null; then
+        # Chromosome-scale: MUMmer (efficient on multi-Mbp sequences)
+        log_info "  Large cluster — using MUMmer (nucmer + mummerplot)"
+        for tag in 1_untrimmed 2_trimmed; do
+            local gfa="${cluster_dir}/${tag}.gfa"
+            local fasta="${cluster_dir}/${tag}.fasta"
+            # Convert GFA to FASTA for nucmer
+            run_cmd autocycler gfa2fasta -i "${gfa}" -o "${fasta}"
+            # Self-vs-self alignment to reveal overlaps and structural issues
+            run_cmd nucmer --maxmatch --nosimplify \
+                "${fasta}" "${fasta}" \
+                -p "${cluster_dir}/${tag}_selfmap"
+            run_cmd mummerplot --png --large \
+                -p "${cluster_dir}/${tag}" \
+                "${cluster_dir}/${tag}_selfmap.delta"
+            # Clean up intermediate files
+            rm -f "${cluster_dir}/${tag}_selfmap.delta" \
+                  "${cluster_dir}/${tag}_selfmap.cluster" \
+                  "${cluster_dir}/${tag}.fasta" \
+                  "${cluster_dir}/${tag}.filt" \
+                  "${cluster_dir}/${tag}.gp"
+        done
+    else
+        log_warn "  Large cluster but nucmer/mummerplot not found — skipping dotplots"
+    fi
+}
+
+# --- 4j. Trim & Resolve ---
+if [[ "${_resume_target}" != "dnaapler" ]]; then
+log_step "4j. Trim & resolve"
+trim_flags=()
+[[ -n "${trim_mad}" ]]          && trim_flags+=(--mad "${trim_mad}")
+[[ -n "${trim_min_identity}" ]] && trim_flags+=(--min_identity "${trim_min_identity}")
+for c in "${autocycler_dir}"/clustering/qc_pass/cluster_*; do
+    log_info "Processing $(basename "$c")..."
+    run_cmd autocycler trim -c "$c" "${trim_flags[@]+${trim_flags[@]}}"
+    generate_dotplots "$c"
+    run_cmd autocycler resolve -c "$c"
+done
+touch .success_trim
+fi # End resume skip for trim stage
+
+# ==============================================================================
+# CURATION POINT 3 — Inspect dotplots
+# ==============================================================================
+
+dotplot_advice="DOTPLOT FILES:"
+for c in "${autocycler_dir}"/clustering/qc_pass/cluster_*; do
+    [[ -f "$c/1_untrimmed.png" ]] && dotplot_advice+="
+  $(basename "$c"): $c/1_untrimmed.png, $c/2_trimmed.png"
+done
+dotplot_advice+="
+
+LOOK FOR: clean diagonal lines; overlap triangles removed after trimming.
+RED FLAGS: jagged diagonal, off-diagonal blocks, triangle still present.
+
+ACTION: Move bad clusters to qc_fail/, then continue."
+
+manual_curation_pause "Inspect dotplots" "${dotplot_advice}"
+
+# --- 4l. Combine ---
+log_step "4l. Combining consensus assembly"
+run_cmd autocycler combine -a "${autocycler_dir}" \
+    -i "${autocycler_dir}"/clustering/qc_pass/cluster_*/5_final.gfa
+
+run_cmd cp "${autocycler_dir}/consensus_assembly.fasta" "${autocycler_consensus}"
+
+# --- 4o. Metrics ---
+if [[ -f "subsampled_reads/subsample.yaml" ]]; then
+    run_cmd cp "subsampled_reads/subsample.yaml" .
+fi
+
+# Extract initial read stats (needs -a for N50 column)
+log_info "Collecting input read metrics via seqkit stats..."
+read -r in_count in_bases in_n50 <<< $(seqkit stats -a -T "${input_fastq}" 2>/dev/null | awk -F'\t' 'NR==1{for(i=1;i<=NF;i++){if($i=="num_seqs")c=i;if($i=="sum_len")b=i;if($i=="N50")n=i}} NR==2{print $c, $b, $n}')
+in_count=${in_count:-N/A}
+in_bases=${in_bases:-N/A}
+in_n50=${in_n50:-N/A}
+
+run_cmd bash -c 'autocycler table > "$1"' _ metrics.tsv
+run_cmd bash -c 'autocycler table -a "$1" -n "$2" >> "$3"' \
+    _ "${autocycler_dir}" "${sample_name}" metrics.tsv
+
+# Prepend columns for input stats
+sed -i "1 s/^/input_read_count\tinput_read_bases\tinput_read_n50\t/" metrics.tsv
+sed -i "2 s/^/${in_count}\t${in_bases}\t${in_n50}\t/" metrics.tsv
+
+# ==============================================================================
+# STEP 4p — Read-depth assessment
+# ==============================================================================
+
+log_step "4p. Read-depth assessment"
+depth_report="$(pwd)/contig_depths.tsv"
+
+if [[ -s "${depth_report}" ]]; then
+    log_info "Found existing depth report. Skipping read-depth assessment..."
+else
+    # Map read type to minimap2 preset
+    case "${read_type}" in
+        ont_r9|ont_r10)  mm2_preset="map-ont"  ;;
+        pacbio_clr)      mm2_preset="map-pb"   ;;
+        pacbio_hifi)     mm2_preset="map-hifi" ;;
+        *)               mm2_preset="map-ont"  ;;
+    esac
+
+    log_info "Mapping filtered reads to consensus (preset: ${mm2_preset})..."
+    run_cmd bash -c '
+        minimap2 -t "$1" -a -x "$2" "$3" "$4" \
+            | samtools sort -@ "$1" -o consensus_mapped.bam
+    ' _ "${threads}" "${mm2_preset}" "${autocycler_consensus}" "${filtered_reads}"
+
+    run_cmd samtools index consensus_mapped.bam
+
+    # Compute per-contig depths and relative depth vs longest contig (chromosome)
+    log_info "Computing per-contig depths..."
+    run_cmd bash -c '
+        depth_report="$1"
+        echo -e "contig\tlength_bp\tavg_depth\trelative_depth" > "${depth_report}"
+
+        # Collect per-contig average depth
+        samtools depth -a consensus_mapped.bam \
+            | awk '\''{
+                sum[$1] += $3
+                cnt[$1]++
+            }
+            END {
+                # Find the longest contig (chromosome) as reference
+                max_len = 0; chr_name = ""; chr_depth = 1
+                for (c in cnt) {
+                    if (cnt[c] > max_len) {
+                        max_len  = cnt[c]
+                        chr_name = c
+                        chr_depth = sum[c] / cnt[c]
+                    }
+                }
+                # Output all contigs sorted by length (descending)
+                for (c in cnt) {
+                    avg = sum[c] / cnt[c]
+                    printf "%s\t%d\t%.1f\t%.2f\n", c, cnt[c], avg, avg / chr_depth
+                }
+            }'\'' \
+            | sort -t$'\''\t'\'' -k2 -rn >> "${depth_report}"
+    ' _ "${depth_report}"
+
+    log_info "Depth report: ${depth_report}"
+
+    run_cmd rm -f consensus_mapped.bam consensus_mapped.bam.bai
+fi
+
+# Print summary to log (always, even on resume)
+if [[ -f "${depth_report}" ]]; then
+    log_info "--- Contig depth summary ---"
+    while IFS=$'\t' read -r contig length avg_depth rel_depth; do
+        if [[ "${contig}" == "contig" ]]; then continue; fi
+        if (( $(echo "${rel_depth} > 1.5" | bc -l 2>/dev/null || echo 0) )); then
+            log_info "  ${contig} (${length} bp): ${avg_depth}× avg, ${rel_depth}× relative ← elevated copy number"
+        else
+            log_info "  ${contig} (${length} bp): ${avg_depth}× avg, ${rel_depth}× relative"
+        fi
+    done < "${depth_report}"
+fi
+
+log_step "Filtering & assembly complete."
+log_info "Consensus: ${autocycler_consensus}"
+log_info "Metrics:   metrics.tsv"
+log_info "Depths:    ${depth_report}"
+
+# ==============================================================================
+# POST-ASSEMBLY: RAGTAG (Optional Scaffold)
+# ==============================================================================
+if [[ -n "${PROKARYONT_RAGTAG:-}" ]] && [[ -f "${PROKARYONT_RAGTAG}" ]]; then
+    log_step "5. Running RagTag scaffolding against reference: ${PROKARYONT_RAGTAG}"
+    if command -v ragtag.py &>/dev/null; then
+        run_cmd ragtag.py scaffold "${PROKARYONT_RAGTAG}" "${autocycler_consensus}" -o ragtag_output
+        if [[ -f "ragtag_output/ragtag.scaffold.fasta" ]]; then
+            autocycler_consensus="$(pwd)/ragtag_output/ragtag.scaffold.fasta"
+            log_info "RagTag complete. Scaffolds promoted to consensus: ${autocycler_consensus}"
+        fi
+    else
+        log_warn "ragtag.py not found in PATH. Skipping RagTag scaffolding."
+    fi
+fi
+
