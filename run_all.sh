@@ -126,7 +126,7 @@ log_step ">>> Stage 3: Polishing & reorientation"
 
 if ! bash "${script_dir}/03_polish_orient.sh" \
     --config "${config_file}" \
-    --assembly autocycler_consensus.fasta \
+    --assembly autocycler_out/consensus_assembly.fasta \
     --pod5-dir "${pod5_dir}" \
     --threads "${threads:-128}" \
     --sample-name "${sample_name}" \
@@ -157,7 +157,7 @@ log_info "Sample:         ${sample_name}"
 log_info "Total runtime:  ${hours}h ${minutes}m ${seconds}s"
 log_info ""
 log_info "Key outputs:"
-log_info "  Consensus:    autocycler_consensus.fasta"
+log_info "  Consensus:    autocycler_out/consensus_assembly.fasta"
 log_info "  Polished:     polished_assembly.fasta"
 log_info "  Final:        dnaapler_reoriented.fasta"
 log_info "  Metrics:      metrics.tsv"

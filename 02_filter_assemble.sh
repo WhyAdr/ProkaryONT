@@ -142,7 +142,7 @@ genome_size_dir="$(pwd)/02_genome_size"
 assemblies_dir="$(pwd)/assemblies"
 autocycler_dir="$(pwd)/autocycler_out"
 filtered_reads="$(pwd)/filtered_input.fastq.gz"
-autocycler_consensus="$(pwd)/autocycler_consensus.fasta"
+autocycler_consensus="${autocycler_dir}/consensus_assembly.fasta"
 
 # ==============================================================================
 # STEP 2 — Filtering with Filtlong
@@ -364,7 +364,28 @@ if [[ "${_resume_target}" != "trim" && "${_resume_target}" != "dnaapler" ]]; the
 # --- 4h. Compress & Cluster ---
 log_step "4h. Compress & cluster"
 run_cmd autocycler compress -i "${assemblies_dir}" -a "${autocycler_dir}"
-run_cmd autocycler cluster -a "${autocycler_dir}"
+
+_cluster_log="${autocycler_dir}/cluster_capture.log"
+if [[ -z "${dry_run:-}" ]]; then
+    autocycler cluster -a "${autocycler_dir}" 2>&1 | tee "${_cluster_log}"
+else
+    log_info "[DRY-RUN] autocycler cluster -a ${autocycler_dir}"
+    touch "${_cluster_log}"
+fi
+
+# --- Cluster QC summary ---
+log_info "--- Cluster QC summary ---"
+awk '
+/^Cluster [0-9]+:/ { cid=$0; next }
+/cluster distance:/  { dist=$0 }
+/passed QC$/         { printf "%s  %s  → passed QC\n", cid, dist; dist="" }
+/failed QC:/         { printf "%s  %s  → %s\n", cid, dist, $0; dist="" }
+' "${_cluster_log}" | while IFS= read -r line; do log_info "  $line"; done
+
+_pass_count=$(grep -c "passed QC$" "${_cluster_log}" || true)
+_fail_reasons=$(grep -c "failed QC:" "${_cluster_log}" || true)
+log_info "Clusters passed: ${_pass_count}, QC fail reasons: ${_fail_reasons}"
+rm -f "${_cluster_log}"
 
 if [[ -f "${autocycler_dir}/clustering/clustering.newick" ]]; then
     log_info "Running ETE3 sanity checks on clustering tree..."
@@ -473,11 +494,68 @@ log_step "4j. Trim & resolve"
 trim_flags=()
 [[ -n "${trim_mad}" ]]          && trim_flags+=(--mad "${trim_mad}")
 [[ -n "${trim_min_identity}" ]] && trim_flags+=(--min_identity "${trim_min_identity}")
+
+# Initialise per-cluster metadata TSV (joined with depth data later)
+_cluster_meta="${autocycler_dir}/cluster_metadata.tsv"
+echo -e "cluster\tcluster_distance\tmedian_len\tmad\tallowed_range\tse_trimmed\thp_trimmed\tkept\texcluded\tanchors\tunique_bridges\tconflicting_bridges\tconsensus_unitigs\tconsensus_length" \
+    > "${_cluster_meta}"
+
 for c in "${autocycler_dir}"/clustering/qc_pass/cluster_*; do
-    log_info "Processing $(basename "$c")..."
-    run_cmd autocycler trim -c "$c" "${trim_flags[@]+${trim_flags[@]}}"
+    cname=$(basename "$c")
+    log_info "Processing ${cname}..."
+
+    # --- Trim with capture ---
+    _trim_log="${c}/trim_capture.log"
+    if [[ -z "${dry_run:-}" ]]; then
+        autocycler trim -c "$c" ${trim_flags[@]+"${trim_flags[@]}"} 2>&1 | tee "${_trim_log}"
+    else
+        log_info "[DRY-RUN] autocycler trim -c $c ${trim_flags[*]+${trim_flags[*]}}"
+        touch "${_trim_log}"
+    fi
+
+    # Parse trim stats
+    _se_count=$(awk '/^Trim start-end overlaps/,/^Trim hairpin overlaps/{if(/trimmed to/)c++} END{print c+0}' "${_trim_log}")
+    _hp_count=$(awk '/^Trim hairpin overlaps/,/^Exclude outliers/{if(/trimmed to/)c++} END{print c+0}' "${_trim_log}")
+    _median=$(grep "^Median sequence length:" "${_trim_log}" | awk '{print $NF}' || echo "?")
+    _mad_val=$(grep "^Median absolute deviation:" "${_trim_log}" | awk '{print $NF}' || echo "?")
+    _range=$(grep "^Allowed length range:" "${_trim_log}" | awk '{print $NF}' || echo "?")
+    _excluded=$(grep -c ": excluded$" "${_trim_log}" || echo 0)
+    _kept=$(grep -c ": kept$" "${_trim_log}" || echo 0)
+
+    log_info "  Trim: ${_se_count} start-end, ${_hp_count} hairpin trimmed"
+    log_info "  MAD filter: median=${_median}, MAD=${_mad_val}, range=${_range}"
+    log_info "  Contigs: ${_kept} kept, ${_excluded} excluded"
+    rm -f "${_trim_log}"
+
+    # --- Dotplots ---
     generate_dotplots "$c"
-    run_cmd autocycler resolve -c "$c"
+
+    # --- Resolve with capture ---
+    _resolve_log="${c}/resolve_capture.log"
+    if [[ -z "${dry_run:-}" ]]; then
+        autocycler resolve -c "$c" 2>&1 | tee "${_resolve_log}"
+    else
+        log_info "[DRY-RUN] autocycler resolve -c $c"
+        touch "${_resolve_log}"
+    fi
+
+    _anchors=$(grep -oP '\d+(?= anchor unitigs found)' "${_resolve_log}" || echo "?")
+    _unique=$(grep "Unique bridges:" "${_resolve_log}" | awk '{print $NF}' || echo "?")
+    _conflict=$(grep "Conflicting bridges:" "${_resolve_log}" | awk '{print $NF}' || echo "?")
+    _final_unitigs=$(grep -oP '^\d+(?= unitig)' "${_resolve_log}" | tail -1 || echo "?")
+    _total_len=$(grep "^total length:" "${_resolve_log}" | tail -1 | awk '{print $3}' || echo "?")
+
+    log_info "  Resolve: ${_anchors} anchors, ${_unique} unique / ${_conflict} conflicting bridges"
+    log_info "  Result: ${_final_unitigs} unitig(s), total length: ${_total_len}"
+    rm -f "${_resolve_log}"
+
+    # --- Recover cluster distance from clustering.tsv ---
+    _cluster_dist=$(awk -F'\t' -v cn="${cname}" '$1==cn{print $2}' \
+        "${autocycler_dir}/clustering/clustering.tsv" 2>/dev/null || echo "?")
+
+    # --- Append to cluster metadata ---
+    echo -e "${cname}\t${_cluster_dist}\t${_median}\t${_mad_val}\t${_range}\t${_se_count}\t${_hp_count}\t${_kept}\t${_excluded}\t${_anchors}\t${_unique}\t${_conflict}\t${_final_unitigs}\t${_total_len}" \
+        >> "${_cluster_meta}"
 done
 touch .success_trim
 fi # End resume skip for trim stage
@@ -502,10 +580,24 @@ manual_curation_pause "Inspect dotplots" "${dotplot_advice}"
 
 # --- 4l. Combine ---
 log_step "4l. Combining consensus assembly"
-run_cmd autocycler combine -a "${autocycler_dir}" \
-    -i "${autocycler_dir}"/clustering/qc_pass/cluster_*/5_final.gfa
 
-run_cmd cp "${autocycler_dir}/consensus_assembly.fasta" "${autocycler_consensus}"
+_combine_log="${autocycler_dir}/combine_capture.log"
+if [[ -z "${dry_run:-}" ]]; then
+    autocycler combine -a "${autocycler_dir}" \
+        -i "${autocycler_dir}"/clustering/qc_pass/cluster_*/5_final.gfa 2>&1 | tee "${_combine_log}"
+else
+    log_info "[DRY-RUN] autocycler combine -a ${autocycler_dir} ..."
+    touch "${_combine_log}"
+fi
+
+# Log combine summary: topology and resolved status
+log_info "--- Combine summary ---"
+grep -E "(circular|linear|total length|fully resolved)" "${_combine_log}" \
+    | sed 's/^/  /' | while IFS= read -r line; do log_info "$line"; done
+rm -f "${_combine_log}"
+
+# Consensus file stays inside autocycler_out/ — downstream scripts reference it there
+autocycler_consensus="${autocycler_dir}/consensus_assembly.fasta"
 
 # --- 4o. Metrics ---
 if [[ -f "subsampled_reads/subsample.yaml" ]]; then
@@ -523,16 +615,43 @@ run_cmd bash -c 'autocycler table > "$1"' _ metrics.tsv
 run_cmd bash -c 'autocycler table -a "$1" -n "$2" >> "$3"' \
     _ "${autocycler_dir}" "${sample_name}" metrics.tsv
 
-# Prepend columns for input stats
-sed -i "1 s/^/input_read_count\tinput_read_bases\tinput_read_n50\t/" metrics.tsv
-sed -i "2 s/^/${in_count}\t${in_bases}\t${in_n50}\t/" metrics.tsv
+# Smart column insertion: avoid duplicating input_read columns
+_header=$(head -1 metrics.tsv)
+if echo "${_header}" | grep -q "input_read_count"; then
+    # Columns exist — fill the empty values in the data row
+    awk -F'\t' -v c="${in_count}" -v b="${in_bases}" -v n="${in_n50}" '
+        BEGIN { OFS="\t" }
+        NR==1 {
+            for (i=1; i<=NF; i++) {
+                if ($i == "input_read_count") ci = i
+                if ($i == "input_read_bases") bi = i
+                if ($i == "input_read_n50")   ni = i
+            }
+            print; next
+        }
+        NR==2 {
+            if (ci && $ci == "") $ci = c
+            if (bi && $bi == "") $bi = b
+            if (ni && $ni == "") $ni = n
+            print; next
+        }
+        { print }
+    ' metrics.tsv > metrics.tsv.tmp && mv metrics.tsv.tmp metrics.tsv
+    log_info "Filled existing input_read columns in metrics.tsv"
+else
+    # Columns don't exist: prepend them (older Autocycler versions)
+    sed -i "1 s/^/input_read_count\tinput_read_bases\tinput_read_n50\t/" metrics.tsv
+    sed -i "2 s/^/${in_count}\t${in_bases}\t${in_n50}\t/" metrics.tsv
+    log_info "Prepended input_read columns to metrics.tsv"
+fi
 
 # ==============================================================================
-# STEP 4p — Read-depth assessment
+# STEP 4p — Read-depth assessment & contig characteristics
 # ==============================================================================
 
 log_step "4p. Read-depth assessment"
 depth_report="$(pwd)/contig_depths.tsv"
+characteristics_report="$(pwd)/contig_characteristics.tsv"
 
 if [[ -s "${depth_report}" ]]; then
     log_info "Found existing depth report. Skipping read-depth assessment..."
@@ -589,22 +708,58 @@ else
     run_cmd rm -f consensus_mapped.bam consensus_mapped.bam.bai
 fi
 
-# Print summary to log (always, even on resume)
-if [[ -f "${depth_report}" ]]; then
-    log_info "--- Contig depth summary ---"
-    while IFS=$'\t' read -r contig length avg_depth rel_depth; do
-        if [[ "${contig}" == "contig" ]]; then continue; fi
+# ==============================================================================
+# STEP 4q — Contig characteristics summary
+# ==============================================================================
+
+log_step "4q. Building contig characteristics summary"
+_cluster_meta="${autocycler_dir}/cluster_metadata.tsv"
+
+# Merge cluster_metadata.tsv (from trim/resolve loop) with contig_depths.tsv
+# Contigs are numbered 1..N in the depth report, clusters in order
+if [[ -f "${_cluster_meta}" && -f "${depth_report}" ]]; then
+    paste <(tail -n +2 "${depth_report}" | nl -ba -w1) \
+          <(tail -n +2 "${_cluster_meta}") \
+        | awk -F'\t' 'BEGIN {
+            OFS="\t"
+            print "contig_num","contig","length_bp","avg_depth","relative_depth","cluster","cluster_distance","median_len","mad","allowed_range","se_trimmed","hp_trimmed","kept","excluded","anchors","unique_bridges","conflicting_bridges","consensus_unitigs","consensus_length"
+        } { print $0 }' > "${characteristics_report}"
+
+    log_info "Contig characteristics: ${characteristics_report}"
+
+    # Print compact summary to log
+    log_info "--- Contig characteristics summary ---"
+    log_info "  #  Length       Cluster  Dist        MAD  Bridges(U/C)  Depth     Rel     Flag"
+    while IFS=$'\t' read -r num contig length avg_depth rel_depth cluster c_dist median mad range se hp kept excl anchors ubr cbr cu cl; do
+        [[ "${num}" =~ ^[0-9] ]] || continue
+        flag=""
         if (( $(echo "${rel_depth} > 1.5" | bc -l 2>/dev/null || echo 0) )); then
-            log_info "  ${contig} (${length} bp): ${avg_depth}× avg, ${rel_depth}× relative ← elevated copy number"
-        else
-            log_info "  ${contig} (${length} bp): ${avg_depth}× avg, ${rel_depth}× relative"
+            flag="← elevated"
         fi
-    done < "${depth_report}"
+        printf -v _line "  %-2s %-10s  %-10s %-10s  %-3s  %-12s  %-8s  %-6s  %s" \
+            "${num}" "${length}" "${cluster}" "${c_dist}" "${mad}" "${ubr}/${cbr}" \
+            "${avg_depth}×" "${rel_depth}×" "${flag}"
+        log_info "${_line}"
+    done < <(tail -n +2 "${characteristics_report}")
+else
+    # Fallback: print depth-only summary if cluster metadata not available
+    if [[ -f "${depth_report}" ]]; then
+        log_info "--- Contig depth summary (cluster metadata not available) ---"
+        while IFS=$'\t' read -r contig length avg_depth rel_depth; do
+            [[ "${contig}" == "contig" ]] && continue
+            if (( $(echo "${rel_depth} > 1.5" | bc -l 2>/dev/null || echo 0) )); then
+                log_info "  ${contig} (${length} bp): ${avg_depth}× avg, ${rel_depth}× relative ← elevated copy number"
+            else
+                log_info "  ${contig} (${length} bp): ${avg_depth}× avg, ${rel_depth}× relative"
+            fi
+        done < "${depth_report}"
+    fi
 fi
 
 log_step "Filtering & assembly complete."
 log_info "Consensus: ${autocycler_consensus}"
 log_info "Metrics:   metrics.tsv"
+log_info "Characteristics: ${characteristics_report}"
 log_info "Depths:    ${depth_report}"
 
 # ==============================================================================

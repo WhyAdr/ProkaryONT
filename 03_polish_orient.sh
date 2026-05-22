@@ -261,6 +261,16 @@ run_cmd dnaapler all \
 
 run_cmd ln -sf "$(pwd)/dnaapler_out/${sample_name}_reoriented.fasta" "${reoriented_assembly}"
 
+# Surface dnaapler rotation details from its log file
+_dnaapler_log=$(find dnaapler_out/ -maxdepth 1 -name "*.log" 2>/dev/null | head -1)
+if [[ -n "${_dnaapler_log}" && -f "${_dnaapler_log}" ]]; then
+    log_info "--- Dnaapler reorientation details ---"
+    grep -iE "(top hit|reoriented|rotated|start coordinate|gene:|dnaA|terL|repA)" "${_dnaapler_log}" \
+        | sed 's/^/  /' | while IFS= read -r line; do log_info "$line"; done
+else
+    log_warn "No dnaapler log file found in dnaapler_out/"
+fi
+
 log_info ">>> CHECK: Review dnaapler_out/ for start gene identification."
 
 # --- Summary -----------------------------------------------------------------
