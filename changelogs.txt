@@ -1,6 +1,44 @@
 PROKARYONT PIPELINE CHANGELOG
 =============================
 
+Date: 2026-06-21
+Author: Antigravity AI Pair Programmer
+
+This changelog records the bug fixes and refinements implemented across the pipeline scripts to address logic errors, performance constraints, and robustness issues.
+
+Summary of Changes
+------------------
+
+1. 00_setup.sh (Foundation Utilities)
+   - Changed `log_error` exit behavior from soft return to a hard `exit 1` to prevent continuation under `||` chains or function scopes.
+   - Replaced static `GZIP_BIN` export with dynamic `get_gzip_cmd()` function to properly support custom thread allocations at execution time.
+
+2. 01_qc_estimate.sh (QC & Genome Estimation)
+   - Integrated dynamic GZIP command mapping.
+   - Fixed `free -g` parsing of available memory by adding a fallback column check.
+   - Reordered `meryl count` arguments to correctly support version 1.4+.
+   - Added heuristic comment for the genome size calculation weighting.
+
+3. 02_filter_assemble.sh (Assembly & Filtering)
+   - Front-loaded `read_type` validation.
+   - Restored detailed multi-line comment rationale on Seqkit quality filtering.
+   - Added `pipefail` to Filtlong and Minimap2 commands to catch silent pipeline crashes.
+   - Overhauled GNU Parallel exit code checks to correctly distinguish and report OOM (signal) kills and count job errors from joblogs.
+   - Replaced temporary file creation for ETE3 checking with direct Python heredoc execution.
+   - Updated ETE3 leaf parser to correctly strip quotes and parse arbitrary leaf name suffixes.
+   - Added `nullglob` checks for combine GFAs to handle empty cluster cases gracefully.
+   - Added pipeline fail fallback to Seqkit stats parsing.
+   - Replaced slow `samtools depth` parsing with efficient `samtools coverage` summaries.
+   - Aligned job-building loops indentation to match else scope.
+
+4. 03_polish_orient.sh (Polishing & Reorientation)
+   - Added dynamic GZIP setup and pipefail logic.
+   - Added dry-run guard to renaming operations.
+   - Removed CPU-centric `--infer-threads` flag from Dorado polish for GPU polishing runs.
+   - Implemented re-run idempotency checks to skip Dnaapler when final outputs are present.
+
+--------------------------------------------------------------------------------
+
 Date: 2026-05-22
 Author: Antigravity AI Pair Programmer
 

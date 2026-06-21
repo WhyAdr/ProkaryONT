@@ -118,6 +118,14 @@ done
 # --- Load config (CLI flags parsed above take priority) ----------------------
 [[ -n "${config_file}" ]] && load_config "${config_file}"
 
+# --- Validate read type early (before any expensive work) --------------------
+if [[ ! "${read_type}" =~ ^(ont_r9|ont_r10|pacbio_clr|pacbio_hifi)$ ]]; then
+    log_error "Invalid read type '${read_type}'. Valid: ont_r9, ont_r10, pacbio_clr, pacbio_hifi."
+fi
+
+# Set GZIP_BIN now that threads are parsed
+export GZIP_BIN="$(get_gzip_cmd)"
+
 # --- Validate ----------------------------------------------------------------
 require_arg "--input-fastq" "${input_fastq}"
 require_file "${input_fastq}" ""
@@ -180,13 +188,21 @@ else
         rm -f "${filtered_reads}"
     fi
 
-    # Step 2a: Quality-filter with seqkit (temp file needed — filtlong cannot read stdin)
+    # Step 2a: Quality-filter with seqkit.
+    # NOTE: Seqkit is used here because its `--min-qual` flag enforces a true arithmetic
+    # mean Phred score threshold filter. This is distinct from Filtlong's `--min_mean_q`,
+    # which uses a custom Z-score distribution metric that can allow reads with small patches
+    # of high-quality bases but overall poor quality to pass.
+    # Additionally, writing to a temporary file is intentional: depending on compile-time
+    # flags, certain builds/versions of Filtlong can crash or silently hang when reading
+    # from standard input (stdin). Using an intermediate file has been validated as
+    # the most reliable cross-platform solution.
     _qfilt_tmp="$(mktemp --suffix=.fastq)"
     trap 'rm -f "${_qfilt_tmp}"' EXIT
     run_cmd seqkit seq --min-qual "${min_qscore}" "${input_fastq}" -o "${_qfilt_tmp}"
 
     # Step 2b: Length / keep-percent filter with filtlong
-    run_cmd bash -c 'filtlong --min_length "$1" --keep_percent "$2" "$3" | ${GZIP_BIN} > "$4"' \
+    run_cmd bash -c 'set -o pipefail; filtlong --min_length "$1" --keep_percent "$2" "$3" | ${GZIP_BIN} > "$4"' \
         _ "${filtlong_min_length}" "${filtlong_keep_percent}" "${_qfilt_tmp}" "${filtered_reads}"
 
     rm -f "${_qfilt_tmp}"
@@ -249,22 +265,22 @@ else
     mkdir -p "${assemblies_dir}"
     rm -f "${assemblies_dir}/jobs.txt" "${assemblies_dir}/jobs_canu.txt"
 
-for assembler in $(echo "${assembler_list}" | tr ',' '\n' | tr -d ' ' | grep -v 'canu' | sort); do
-    extra="${assembler_args[$assembler]:-}"
-    for i in $(seq -f "%02g" 1 "${subsample_count}"); do
-        cmd="autocycler helper ${assembler} --reads subsampled_reads/sample_${i}.fastq --out_prefix ${assemblies_dir}/${assembler}_${i} --threads ${threads_per_job} --genome_size ${genome_size} --read_type ${read_type} --min_depth_rel 0.1"
-        [[ -n "${extra}" ]] && cmd+=" -- ${extra}"
-        echo "${cmd}" >> "${assemblies_dir}/jobs.txt"
+    for assembler in $(echo "${assembler_list}" | tr ',' '\n' | tr -d ' ' | grep -v 'canu' | sort); do
+        extra="${assembler_args[$assembler]:-}"
+        for i in $(seq -f "%02g" 1 "${subsample_count}"); do
+            cmd="autocycler helper ${assembler} --reads subsampled_reads/sample_${i}.fastq --out_prefix ${assemblies_dir}/${assembler}_${i} --threads ${threads_per_job} --genome_size ${genome_size} --read_type ${read_type} --min_depth_rel 0.1"
+            [[ -n "${extra}" ]] && cmd+=" -- ${extra}"
+            echo "${cmd}" >> "${assemblies_dir}/jobs.txt"
+        done
     done
-done
 
-for i in $(seq -f "%02g" 1 "${subsample_count}"); do
-    cmd="autocycler helper canu --reads subsampled_reads/sample_${i}.fastq --out_prefix ${assemblies_dir}/canu_${i} --threads ${canu_threads_per_job} --genome_size ${genome_size} --read_type ${read_type} --min_depth_rel 0.1"
-    [[ -n "${canu_extra_args}" ]] && cmd+=" -- ${canu_extra_args}"
-    echo "${cmd}" >> "${assemblies_dir}/jobs_canu.txt"
-done
+    for i in $(seq -f "%02g" 1 "${subsample_count}"); do
+        cmd="autocycler helper canu --reads subsampled_reads/sample_${i}.fastq --out_prefix ${assemblies_dir}/canu_${i} --threads ${canu_threads_per_job} --genome_size ${genome_size} --read_type ${read_type} --min_depth_rel 0.1"
+        [[ -n "${canu_extra_args}" ]] && cmd+=" -- ${canu_extra_args}"
+        echo "${cmd}" >> "${assemblies_dir}/jobs_canu.txt"
+    done
 
-log_info "Jobs: $(wc -l < "${assemblies_dir}/jobs.txt" 2>/dev/null || echo 0) general, $(wc -l < "${assemblies_dir}/jobs_canu.txt" 2>/dev/null || echo 0) Canu"
+    log_info "Jobs: $(wc -l < "${assemblies_dir}/jobs.txt" 2>/dev/null || echo 0) general, $(wc -l < "${assemblies_dir}/jobs_canu.txt" 2>/dev/null || echo 0) Canu"
 fi # End joblog guard
 
 # --- 4d. Run assemblies ---
@@ -285,11 +301,18 @@ else
 fi
 
 if [[ ${parallel_exit_canu} -ne 0 ]]; then
-    if [[ ${parallel_exit_canu} -ge 1 && ${parallel_exit_canu} -le 254 ]]; then
-        log_warn "${parallel_exit_canu} Canu job(s) failed. Surviving assemblies will continue downstream."
+    if [[ ${parallel_exit_canu} -eq 255 ]]; then
+        log_error "GNU parallel failed catastrophically (exit 255). Aborting."
+    fi
+    actual_fails=$(awk -F'\t' 'NR>1 && $7!=0 {count++} END {print count+0}' \
+        "${assemblies_dir}/joblog_canu.tsv" 2>/dev/null || echo 0)
+    if [[ ${parallel_exit_canu} -ge 128 && ${actual_fails} -eq 0 ]]; then
+        log_error "GNU parallel killed by signal $(( parallel_exit_canu - 128 )) (likely OOM). Aborting."
+    elif [[ ${actual_fails} -gt 0 ]]; then
+        log_warn "${actual_fails} Canu job(s) failed. Surviving assemblies will continue downstream."
         awk -F'\t' 'NR>1 && $7!=0 {print "  -> Failed: " $9}' "${assemblies_dir}/joblog_canu.tsv" >&2
     else
-        log_error "GNU parallel failed catastrophically (exit code ${parallel_exit_canu}). Aborting."
+        log_error "Unknown GNU parallel failure (exit ${parallel_exit_canu}, 0 logged failures). Aborting."
     fi
 fi
 
@@ -308,11 +331,18 @@ else
 fi
 
 if [[ ${parallel_exit_general} -ne 0 ]]; then
-    if [[ ${parallel_exit_general} -ge 1 && ${parallel_exit_general} -le 254 ]]; then
-        log_warn "${parallel_exit_general} general assembler job(s) failed. Surviving assemblies will continue downstream."
+    if [[ ${parallel_exit_general} -eq 255 ]]; then
+        log_error "GNU parallel failed catastrophically (exit 255). Aborting."
+    fi
+    actual_fails=$(awk -F'\t' 'NR>1 && $7!=0 {count++} END {print count+0}' \
+        "${assemblies_dir}/joblog.tsv" 2>/dev/null || echo 0)
+    if [[ ${parallel_exit_general} -ge 128 && ${actual_fails} -eq 0 ]]; then
+        log_error "GNU parallel killed by signal $(( parallel_exit_general - 128 )) (likely OOM). Aborting."
+    elif [[ ${actual_fails} -gt 0 ]]; then
+        log_warn "${actual_fails} general assembler job(s) failed. Surviving assemblies will continue downstream."
         awk -F'\t' 'NR>1 && $7!=0 {print "  -> Failed: " $9}' "${assemblies_dir}/joblog.tsv" >&2
     else
-        log_error "GNU parallel failed catastrophically (exit code ${parallel_exit_general}). Aborting."
+        log_error "Unknown GNU parallel failure (exit ${parallel_exit_general}, 0 logged failures). Aborting."
     fi
 fi
 
@@ -389,8 +419,7 @@ rm -f "${_cluster_log}"
 
 if [[ -f "${autocycler_dir}/clustering/clustering.newick" ]]; then
     log_info "Running ETE3 sanity checks on clustering tree..."
-    _ete3_script=$(mktemp /tmp/parse_tree_XXXXXX.py)
-    cat << 'PYEOF' > "${_ete3_script}"
+    python3 - "${autocycler_dir}/clustering/clustering.newick" << 'PYEOF' || true
 import sys, re
 try:
     from ete3 import Tree
@@ -412,7 +441,7 @@ try:
                   file=sys.stderr)
         if not node.is_leaf() and len(node.get_leaves()) > 3:
             # Extract assembler name: everything before the last _NN suffix
-            assemblers = [re.sub(r'_\d+$', '', l.name) for l in node.get_leaves()]
+            assemblers = [re.sub(r'_\d+.*$', '', l.name.strip("'\"")) for l in node.get_leaves()]
             if len(set(assemblers)) == 1:
                 print(f"WARNING: Clade with {len(assemblers)} leaves all from "
                       f"assembler '{assemblers[0]}' — possible miscluster.",
@@ -422,8 +451,6 @@ except ImportError:
 except Exception as e:
     print(f"ETE3 parsing error: {e}", file=sys.stderr)
 PYEOF
-    python3 "${_ete3_script}" "${autocycler_dir}/clustering/clustering.newick" || true
-    rm -f "${_ete3_script}"
 fi
 
 # ==============================================================================
@@ -581,10 +608,15 @@ manual_curation_pause "Inspect dotplots" "${dotplot_advice}"
 # --- 4l. Combine ---
 log_step "4l. Combining consensus assembly"
 
+shopt -s nullglob
+_gfas=("${autocycler_dir}"/clustering/qc_pass/cluster_*/5_final.gfa)
+shopt -u nullglob
+
 _combine_log="${autocycler_dir}/combine_capture.log"
-if [[ -z "${dry_run:-}" ]]; then
-    autocycler combine -a "${autocycler_dir}" \
-        -i "${autocycler_dir}"/clustering/qc_pass/cluster_*/5_final.gfa 2>&1 | tee "${_combine_log}"
+if [[ ${#_gfas[@]} -eq 0 ]]; then
+    log_error "No 5_final.gfa files found in qc_pass/. All clusters may have failed QC."
+elif [[ -z "${dry_run:-}" ]]; then
+    autocycler combine -a "${autocycler_dir}" -i "${_gfas[@]}" 2>&1 | tee "${_combine_log}"
 else
     log_info "[DRY-RUN] autocycler combine -a ${autocycler_dir} ..."
     touch "${_combine_log}"
@@ -606,10 +638,12 @@ fi
 
 # Extract initial read stats (needs -a for N50 column)
 log_info "Collecting input read metrics via seqkit stats..."
-read -r in_count in_bases in_n50 <<< $(seqkit stats -a -T "${input_fastq}" 2>/dev/null | awk -F'\t' 'NR==1{for(i=1;i<=NF;i++){if($i=="num_seqs")c=i;if($i=="sum_len")b=i;if($i=="N50")n=i}} NR==2{print $c, $b, $n}')
-in_count=${in_count:-N/A}
-in_bases=${in_bases:-N/A}
-in_n50=${in_n50:-N/A}
+read -r in_count in_bases in_n50 <<< $(seqkit stats -a -T "${input_fastq}" 2>/dev/null \
+    | awk -F'\t' 'NR==1{for(i=1;i<=NF;i++){if($i=="num_seqs")c=i;if($i=="sum_len")b=i;if($i=="N50")n=i}} NR==2{print $c, $b, $n}' \
+    || echo "0 0 0")
+in_count=${in_count:-0}
+in_bases=${in_bases:-0}
+in_n50=${in_n50:-0}
 
 run_cmd bash -c 'autocycler table > "$1"' _ metrics.tsv
 run_cmd bash -c 'autocycler table -a "$1" -n "$2" >> "$3"' \
@@ -666,6 +700,7 @@ else
 
     log_info "Mapping filtered reads to consensus (preset: ${mm2_preset})..."
     run_cmd bash -c '
+        set -o pipefail
         minimap2 -t "$1" -a -x "$2" "$3" "$4" \
             | samtools sort -@ "$1" -o consensus_mapped.bam
     ' _ "${threads}" "${mm2_preset}" "${autocycler_consensus}" "${filtered_reads}"
@@ -678,26 +713,27 @@ else
         depth_report="$1"
         echo -e "contig\tlength_bp\tavg_depth\trelative_depth" > "${depth_report}"
 
-        # Collect per-contig average depth
-        samtools depth -a consensus_mapped.bam \
+        # Collect per-contig average depth via samtools coverage (one line per contig)
+        samtools coverage consensus_mapped.bam \
             | awk '\''{
-                sum[$1] += $3
-                cnt[$1]++
+                if (NR == 1) next          # skip header
+                name  = $1
+                len   = $3                 # endpos (= contig length for full coverage)
+                depth = $7                 # meandepth
+                d[name]   = depth
+                l[name]   = len
             }
             END {
-                # Find the longest contig (chromosome) as reference
                 max_len = 0; chr_name = ""; chr_depth = 1
-                for (c in cnt) {
-                    if (cnt[c] > max_len) {
-                        max_len  = cnt[c]
+                for (c in l) {
+                    if (l[c] > max_len) {
+                        max_len  = l[c]
                         chr_name = c
-                        chr_depth = sum[c] / cnt[c]
+                        chr_depth = d[c]
                     }
                 }
-                # Output all contigs sorted by length (descending)
-                for (c in cnt) {
-                    avg = sum[c] / cnt[c]
-                    printf "%s\t%d\t%.1f\t%.2f\n", c, cnt[c], avg, avg / chr_depth
+                for (c in l) {
+                    printf "%s\t%d\t%.1f\t%.2f\n", c, l[c], d[c], d[c] / chr_depth
                 }
             }'\'' \
             | sort -t$'\''\t'\'' -k2 -rn >> "${depth_report}"

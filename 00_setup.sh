@@ -40,7 +40,7 @@ log_error() {
     local msg="[$(_log_ts)] [ERROR] $*"
     echo -e "\033[1;31m${msg}\033[0m" >&2
     [[ -n "${log_file:-}" ]] && echo "${msg}" >> "${log_file}"
-    return 1 2>/dev/null || exit 1
+    exit 1
 }
 
 # ==============================================================================
@@ -170,8 +170,10 @@ touch "${log_file}"
 # COMPRESSION UTILITIES
 # ==============================================================================
 
-if command -v pigz &>/dev/null; then
-    export GZIP_BIN="pigz -p ${threads:-4}"
-else
-    export GZIP_BIN="gzip"
-fi
+get_gzip_cmd() {
+    if command -v pigz &>/dev/null; then
+        echo "pigz -p ${threads:-4}"
+    else
+        echo "gzip"
+    fi
+}

@@ -64,6 +64,9 @@ done
 # --- Load config (CLI flags parsed above take priority) ----------------------
 [[ -n "${config_file}" ]] && load_config "${config_file}"
 
+# Set GZIP_BIN now that threads are parsed
+export GZIP_BIN="$(get_gzip_cmd)"
+
 # --- Validate ----------------------------------------------------------------
 require_arg "--input-fastq" "${input_fastq}"
 require_arg "--sequencing-summary" "${sequencing_summary}"
@@ -144,6 +147,7 @@ if [[ -f "${genome_size_dir}/assembly.fasta" ]]; then
 fi
 
 if [[ -n "${lrge_size:-}" && -n "${raven_size:-}" ]]; then
+    # Heuristic: Raven assembly length is generally more accurate than LRGE k-mer estimation
     mean_genome_size=$(( (2 * raven_size + lrge_size) / 3 ))
     echo "${mean_genome_size}" > "${genome_size_dir}/mean_genome_size.txt"
     log_info "Weighted Mean Genome Size ((2*Raven + LRGE) / 3): ${mean_genome_size} bp"
@@ -151,14 +155,14 @@ fi
 
 log_info "Running Meryl k-mer counting..."
 if [[ -z "${meryl_memory}" ]]; then
-    meryl_memory=$(free -g 2>/dev/null | awk '/^Mem:/{print $7}')
+    meryl_memory=$(free -g 2>/dev/null | awk '/^Mem:/{print ($7 != "" ? $7 : $4)}')
     meryl_memory="${meryl_memory:-16}"
 fi
 
 if [[ -d "${genome_size_dir}/genome.meryl" ]]; then
     log_info "Found existing Meryl database. Skipping k-mer counting..."
 else
-    run_cmd meryl count k="${meryl_kmer_size}" memory="${meryl_memory}" threads="${threads}" compress \
+    run_cmd meryl count compress k="${meryl_kmer_size}" memory="${meryl_memory}" threads="${threads}" \
         output "${genome_size_dir}/genome.meryl" "${input_fastq}"
 fi
 

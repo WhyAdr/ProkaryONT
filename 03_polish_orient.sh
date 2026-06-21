@@ -72,6 +72,9 @@ done
 # --- Load config (CLI flags parsed above take priority) ----------------------
 [[ -n "${config_file}" ]] && load_config "${config_file}"
 
+# Set GZIP_BIN now that threads are parsed
+export GZIP_BIN="$(get_gzip_cmd)"
+
 # --- Validate ----------------------------------------------------------------
 require_arg "--assembly" "${assembly}"
 require_arg "--pod5-dir" "${pod5_dir}"
@@ -134,7 +137,7 @@ else
         log_warn "Existing aligned.sorted.bam is incomplete or corrupt. Overwriting..."
         rm -f aligned.sorted.bam aligned.sorted.bam.bai
     fi
-    run_cmd bash -c 'dorado aligner "$1" "$2" --threads "$3" | samtools sort -@ "$3" -o aligned.sorted.bam' \
+    run_cmd bash -c 'set -o pipefail; dorado aligner "$1" "$2" --threads "$3" | samtools sort -@ "$3" -o aligned.sorted.bam' \
         _ "${assembly}" all_reads_w_moves.bam "${threads}"
     run_cmd samtools index -@ "${threads}" aligned.sorted.bam
 fi
@@ -201,7 +204,9 @@ if [[ -z "${dry_run:-}" ]]; then
                         
                         log_info "Unifying read groups to ID '${unified_rg_id}'..."
                         run_cmd samtools addreplacerg -r "${new_rg_line}" -m overwrite_all -o aligned.unified.bam aligned.sorted.bam
-                        mv aligned.unified.bam aligned.sorted.bam
+                        if [[ -z "${dry_run:-}" ]]; then
+                            mv aligned.unified.bam aligned.sorted.bam
+                        fi
                         run_cmd samtools index -@ "${threads}" aligned.sorted.bam
                         log_info "Read groups successfully unified under ID '${unified_rg_id}'."
                         dorado_rg_flag=()
@@ -228,7 +233,7 @@ if [[ -z "${dry_run:-}" ]]; then
 fi
 
 run_cmd bash -c 'dorado polish "$1" "$2" \
-    --bacteria --threads "$3" --infer-threads "$3" "${@:5}" \
+    --bacteria --threads "$3" "${@:5}" \
     > "$4"' \
     _ aligned.sorted.bam "${assembly}" "${threads}" "${polished_assembly}" "${dorado_rg_flag[@]}"
 
@@ -249,15 +254,19 @@ fi # End polishing skip guard
 log_step "Step 6: Dnaapler reorientation"
 
 log_info "6a. Reorienting contigs..."
-if [[ -d "dnaapler_out" ]]; then
-    log_warn "Existing dnaapler_out/ found. Removing for clean re-run..."
-    rm -rf dnaapler_out
+if [[ -s "dnaapler_out/${sample_name}_reoriented.fasta" ]]; then
+    log_info "Found existing Dnaapler output. Skipping reorientation..."
+else
+    if [[ -d "dnaapler_out" ]]; then
+        log_warn "Existing dnaapler_out/ found (incomplete). Removing for clean re-run..."
+        rm -rf dnaapler_out
+    fi
+    run_cmd dnaapler all \
+        -i "${polished_assembly}" \
+        -o dnaapler_out \
+        -p "${sample_name}" \
+        -t "${threads}"
 fi
-run_cmd dnaapler all \
-    -i "${polished_assembly}" \
-    -o dnaapler_out \
-    -p "${sample_name}" \
-    -t "${threads}"
 
 run_cmd ln -sf "$(pwd)/dnaapler_out/${sample_name}_reoriented.fasta" "${reoriented_assembly}"
 
