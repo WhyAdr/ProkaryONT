@@ -112,6 +112,12 @@ load_config() {
         value="$(echo "${value}" | sed 's/[[:space:]]#.*$//')"
         value="$(echo "${value}" | sed 's/^["'\'']*//;s/["'\'']*$//' | xargs)"
 
+        # BUG 16: Restrict keys to lowercase snake_case to prevent hijacking special environment variables
+        if [[ ! "${key}" =~ ^[a-z][a-z0-9_]*$ ]]; then
+            log_warn "Ignoring invalid or restricted configuration key: ${key}"
+            continue
+        fi
+
         # Only set if not already set (CLI flags take priority)
         if [[ -z "${!key:-}" ]]; then
             declare -g "${key}=${value}"
@@ -153,7 +159,10 @@ dry_run="${dry_run:-}"
 
 run_cmd() {
     if [[ -n "${dry_run}" ]]; then
-        log_info "[DRY-RUN] $*"
+        local cmd_str
+        cmd_str=$(printf "%q " "$@")
+        cmd_str="${cmd_str% }"
+        log_info "[DRY-RUN] ${cmd_str}"
     else
         "$@"
     fi
@@ -164,7 +173,9 @@ run_cmd() {
 # ==============================================================================
 
 log_file="${log_file:-$(pwd)/pipeline.log}"
-touch "${log_file}"
+if ! touch "${log_file}" &>/dev/null; then
+    log_file="/dev/null"
+fi
 
 # ==============================================================================
 # COMPRESSION UTILITIES

@@ -127,7 +127,7 @@ if [[ -z "${dry_run:-}" ]]; then
 fi
 
 log_info "5b. Aligning to draft assembly..."
-if [[ -s "aligned.sorted.bam" ]] && samtools quickcheck aligned.sorted.bam 2>/dev/null; then
+if [[ -s "aligned.sorted.bam" ]] && samtools quickcheck -u aligned.sorted.bam 2>/dev/null; then
     log_info "Found valid existing aligned.sorted.bam. Skipping alignment..."
     if [[ ! -s "aligned.sorted.bam.bai" ]]; then
         run_cmd samtools index -@ "${threads}" aligned.sorted.bam
@@ -200,7 +200,7 @@ if [[ -z "${dry_run:-}" ]]; then
                         
                         first_rg_line=$(echo "$rg_lines" | head -n 1)
                         # Replace the existing ID value with the user-provided one
-                        new_rg_line=$(echo "$first_rg_line" | sed "s/\tID:[^\t]*/\tID:${unified_rg_id}/")
+                        new_rg_line=$(echo "$first_rg_line" | sed $'s/\tID:[^\t]*/\tID:'"${unified_rg_id}"$'/')
                         
                         log_info "Unifying read groups to ID '${unified_rg_id}'..."
                         run_cmd samtools addreplacerg -r "${new_rg_line}" -m overwrite_all -o aligned.unified.bam aligned.sorted.bam
@@ -268,7 +268,7 @@ else
         -t "${threads}"
 fi
 
-run_cmd ln -sf "$(pwd)/dnaapler_out/${sample_name}_reoriented.fasta" "${reoriented_assembly}"
+run_cmd cp "dnaapler_out/${sample_name}_reoriented.fasta" "${reoriented_assembly}"
 
 # Surface dnaapler rotation details from its log file
 _dnaapler_log=$(find dnaapler_out/ -maxdepth 1 -name "*.log" 2>/dev/null | head -1)

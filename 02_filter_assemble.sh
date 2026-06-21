@@ -289,7 +289,7 @@ log_step "4d. Running assemblies..."
 if [[ -f "${assemblies_dir}/jobs_canu.txt" && -s "${assemblies_dir}/jobs_canu.txt" ]]; then
     log_info "Running Canu (${canu_parallel_jobs} jobs × ${canu_threads_per_job} threads)..."
     set +e
-    run_cmd nice -n 19 parallel --bar --jobs "${canu_parallel_jobs}" \
+    run_cmd parallel --nice 19 --bar --jobs "${canu_parallel_jobs}" \
         --joblog "${assemblies_dir}/joblog_canu.tsv" \
         --resume --resume-failed \
         --results "${assemblies_dir}/logs" --timeout 16h \
@@ -319,7 +319,7 @@ fi
 if [[ -f "${assemblies_dir}/jobs.txt" && -s "${assemblies_dir}/jobs.txt" ]]; then
     log_info "Running general assemblers (${parallel_jobs} jobs × ${threads_per_job} threads)..."
     set +e
-    run_cmd nice -n 19 parallel --bar --jobs "${parallel_jobs}" \
+    run_cmd parallel --nice 19 --bar --jobs "${parallel_jobs}" \
         --joblog "${assemblies_dir}/joblog.tsv" \
         --resume --resume-failed \
         --results "${assemblies_dir}/logs" --timeout 8h \
@@ -378,7 +378,7 @@ advice="DIAGNOSTICS:
 
 for f in "${assemblies_dir}"/*.fasta; do
     [[ -f "$f" ]] && advice+="
-    $(basename "$f"): $(grep -v '^>' "$f" | tr -d '\n' | wc -c) bp"
+    $(basename "$f"): $(grep -v '^>' "$f" | tr -d '\r\n' | wc -c) bp"
 done
 
 advice+="

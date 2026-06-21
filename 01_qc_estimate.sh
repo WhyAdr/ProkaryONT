@@ -24,6 +24,7 @@ sequencing_summary="${sequencing_summary:-}"
 meryl_memory="${meryl_memory:-}"
 meryl_kmer_size="${meryl_kmer_size:-21}"
 nanoplot_color="${nanoplot_color:-green}"
+lrge_seed="${lrge_seed:-123}"
 config_file="${config_file:-}"
 
 # --- Usage -------------------------------------------------------------------
@@ -112,7 +113,7 @@ fi
 log_info ">>> CHECK: Open ${qc_dir}/NanoPlot_sample/NanoPlot-report.html"
 
 # ==============================================================================
-# STEP 3 — Genome Size Estimation
+# STEP 3 — Genome Size Estimation (Note: Step 2 is in 02_filter_assemble.sh)
 # ==============================================================================
 
 log_step "Step 3: Genome size estimation"
@@ -123,8 +124,8 @@ if [[ -s "${genome_size_dir}/lrge_output.txt" ]]; then
     lrge_size=$(cat "${genome_size_dir}/lrge_output.txt")
     log_info "Found existing LRGE estimate: ${lrge_size}. Skipping..."
 else
-    run_cmd bash -c 'lrge -P ont -t "$1" -s 123 "$2" > "$3"' \
-        _ "${threads}" "${input_fastq}" "${genome_size_dir}/lrge_output.txt"
+    run_cmd bash -c 'lrge -P ont -t "$1" -s "$2" "$3" > "$4"' \
+        _ "${threads}" "${lrge_seed}" "${input_fastq}" "${genome_size_dir}/lrge_output.txt"
     if [[ -z "${dry_run:-}" && -f "${genome_size_dir}/lrge_output.txt" ]]; then
         lrge_size=$(cat "${genome_size_dir}/lrge_output.txt")
         log_info "LRGE estimated genome size: ${lrge_size}"
@@ -141,9 +142,10 @@ else
         _ "${threads}" "${genome_size_dir}/assemblyGraph.gfa" "${input_fastq}" "${genome_size_dir}/assembly.fasta"
 fi
 
-if [[ -f "${genome_size_dir}/assembly.fasta" ]]; then
-    raven_size=$(grep -v '^>' "${genome_size_dir}/assembly.fasta" | tr -d '\n' | wc -c)
+if [[ -z "${dry_run:-}" && -f "${genome_size_dir}/assembly.fasta" ]]; then
+    raven_size=$(grep -v '^>' "${genome_size_dir}/assembly.fasta" | tr -d '\r\n' | wc -c)
     log_info "Raven assembly size: ${raven_size} bp"
+    run_cmd rm -f "${genome_size_dir}/assemblyGraph.gfa"
 fi
 
 if [[ -n "${lrge_size:-}" && -n "${raven_size:-}" ]]; then

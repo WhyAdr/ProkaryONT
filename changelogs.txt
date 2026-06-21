@@ -2,7 +2,7 @@ PROKARYONT PIPELINE CHANGELOG
 =============================
 
 Date: 2026-06-21
-Author: Antigravity AI Pair Programmer
+Author: WhyAdr & Antigravity AI Pair Programmer
 
 This changelog records the bug fixes and refinements implemented across the pipeline scripts to address logic errors, performance constraints, and robustness issues.
 
@@ -12,12 +12,20 @@ Summary of Changes
 1. 00_setup.sh (Foundation Utilities)
    - Changed `log_error` exit behavior from soft return to a hard `exit 1` to prevent continuation under `||` chains or function scopes.
    - Replaced static `GZIP_BIN` export with dynamic `get_gzip_cmd()` function to properly support custom thread allocations at execution time.
+   - Restricted `load_config` keys strictly to lowercase snake_case (`^[a-z][a-z0-9_]*$`) to protect system environment variables from configuration overrides.
+   - Enhanced dry-run command logging format using `printf %q` to preserve shell-escaped command structure.
+   - Hardened log file initialization by checking write permission and falling back to `/dev/null` on failure.
 
 2. 01_qc_estimate.sh (QC & Genome Estimation)
    - Integrated dynamic GZIP command mapping.
    - Fixed `free -g` parsing of available memory by adding a fallback column check.
    - Reordered `meryl count` arguments to correctly support version 1.4+.
    - Added heuristic comment for the genome size calculation weighting.
+   - Guarded `raven_size` calculation in dry-run mode to prevent parsing stale assembly files.
+   - Fixed carriage return accounting (`tr -d '\r\n'`) to prevent CRLF line endings from inflating computed sizes.
+   - Cleaned up intermediate Raven GFA files after size computation to conserve disk space.
+   - Supported a configurable `lrge_seed` parameter (default 123) for reproducibility.
+   - Documented the step gap (Step 2 resides in `02_filter_assemble.sh`).
 
 3. 02_filter_assemble.sh (Assembly & Filtering)
    - Front-loaded `read_type` validation.
@@ -30,12 +38,20 @@ Summary of Changes
    - Added pipeline fail fallback to Seqkit stats parsing.
    - Replaced slow `samtools depth` parsing with efficient `samtools coverage` summaries.
    - Aligned job-building loops indentation to match else scope.
+   - Fixed carriage return accounting (`tr -d '\r\n'`) in curation diagnostics.
+   - Passed `--nice 19` option explicitly to parallel itself rather than using the `nice` utility.
 
 4. 03_polish_orient.sh (Polishing & Reorientation)
    - Added dynamic GZIP setup and pipefail logic.
    - Added dry-run guard to renaming operations.
    - Removed CPU-centric `--infer-threads` flag from Dorado polish for GPU polishing runs.
    - Implemented re-run idempotency checks to skip Dnaapler when final outputs are present.
+   - Replaced fragile tab escaping regex in SAM RG unification with C-string quoting (`$'...'`).
+   - Standardized use of `samtools quickcheck -u` across all alignments validation checks.
+   - Copied final reoriented assemblies to output instead of symlinking.
+
+5. run_all.sh (Master Orchestrator)
+   - Forwarded `skip_curation` systematically to all child scripts via `common_flags`.
 
 --------------------------------------------------------------------------------
 

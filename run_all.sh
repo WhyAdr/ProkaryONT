@@ -53,6 +53,7 @@ require_arg "sample_name (in config)" "${sample_name:-}"
 # --- Build common flags ------------------------------------------------------
 common_flags=()
 [[ -n "${dry_run:-}" ]] && common_flags+=(--dry-run)
+[[ -n "${skip_curation:-}" ]] && common_flags+=(--skip-curation)
 
 pipeline_start=$(date +%s)
 
@@ -106,7 +107,6 @@ filter_flags=(
 )
 [[ -n "${genome_size_override:-}" ]] && filter_flags+=(--genome-size "${genome_size_override}")
 [[ -n "${min_read_depth:-}" ]]      && filter_flags+=(--min-read-depth "${min_read_depth}")
-[[ -n "${skip_curation}" ]]          && filter_flags+=(--skip-curation)
 
 if ! bash "${script_dir}/02_filter_assemble.sh" \
     "${filter_flags[@]}" \
@@ -132,7 +132,6 @@ if ! bash "${script_dir}/03_polish_orient.sh" \
     --sample-name "${sample_name}" \
     --dorado-model "${dorado_model:-sup}" \
     --min-qscore "${dorado_min_qscore:-7}" \
-    ${skip_curation:+--skip-curation} \
     "${common_flags[@]+"${common_flags[@]}"}"; then
     log_error "03_polish_orient.sh failed. Pipeline aborted."
 fi
