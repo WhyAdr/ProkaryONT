@@ -28,6 +28,9 @@
 
 source "$(dirname "$0")/00_setup.sh"
 
+# Steps 1–3 run in 01_qc_estimate.sh (Fastcat, Porechop_ABI scan, SNIKT baseline).
+# This script runs Steps 4–8 (adapter trim, end-crop, complexity filter, QC filter, post-filter QC).
+
 # --- Defaults ----------------------------------------------------------------
 threads="${threads:-128}"
 input_fastq="${input_fastq:-}"
@@ -136,6 +139,7 @@ cleanup() {
     [[ -n "${_crop_tmp:-}" && -f "${_crop_tmp}" ]] && rm -f "${_crop_tmp}"
     [[ -n "${_lint_tmp:-}" && -f "${_lint_tmp}" ]] && rm -f "${_lint_tmp}"
     [[ -n "${_qfilt_tmp:-}" && -f "${_qfilt_tmp}" ]] && rm -f "${_qfilt_tmp}"
+    # Prevent trap from overriding the script's own exit code on failure
     true
 }
 trap cleanup EXIT
@@ -272,8 +276,10 @@ run_cmd NanoPlot --threads "${threads}" -c green \
     --loglength --plots dot --N50
 
 log_info "Running Fastplong for QC reporting only — its Q-score formula is a flat arithmetic mean of raw Phred integers with integer truncation, which diverges from Seqkit's probability-space mean (see STEP 7 comment), so it is never used for filtering decisions here."
-run_cmd fastplong -i "${filtered_reads}" -o /dev/null \
-    --html "${qc_dir}/fastplong_report.html" --json "${qc_dir}/fastplong_report.json" \
+run_cmd fastplong -i "${filtered_reads}" \
+    -Q -L -A \
+    --html "${qc_dir}/fastplong_report.html" \
+    --json "${qc_dir}/fastplong_report.json" \
     --thread "${threads}"
 
 log_info ">>> CHECK: Compare ${qc_dir}/NanoPlot_FiltPol/ to ${qc_dir}/NanoPlot_sample/; review ${qc_dir}/fastplong_report.html"

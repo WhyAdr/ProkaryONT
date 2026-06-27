@@ -280,14 +280,18 @@ fi
 # --- 9e. Apply weighting ---
 log_info "9e. Applying Autocycler weighting..."
 shopt -s nullglob
-tmp_weight=$(mktemp)
-for f in "${assemblies_dir}"/plassembler*.fasta; do
-    sed '/Autocycler_cluster_weight=/! s/circular=[Tt][Rr][Uu][Ee]/circular=True Autocycler_cluster_weight=3/I' "$f" > "$tmp_weight" && mv "$tmp_weight" "$f"
-done
-for f in "${assemblies_dir}"/canu*.fasta "${assemblies_dir}"/flye*.fasta "${assemblies_dir}"/hifiasm*.fasta; do
-    sed '/Autocycler_consensus_weight=/! s/^>.*$/& Autocycler_consensus_weight=2/' "$f" > "$tmp_weight" && mv "$tmp_weight" "$f"
-done
-run_cmd rm -f "$tmp_weight"
+if [[ -z "${dry_run:-}" ]]; then
+    tmp_weight=$(mktemp)
+    for f in "${assemblies_dir}"/plassembler*.fasta; do
+        sed '/Autocycler_cluster_weight=/! s/circular=[Tt][Rr][Uu][Ee]/circular=True Autocycler_cluster_weight=3/I' "$f" > "$tmp_weight" && mv "$tmp_weight" "$f"
+    done
+    for f in "${assemblies_dir}"/canu*.fasta "${assemblies_dir}"/flye*.fasta "${assemblies_dir}"/hifiasm*.fasta; do
+        sed '/Autocycler_consensus_weight=/! s/^>.*$/& Autocycler_consensus_weight=2/' "$f" > "$tmp_weight" && mv "$tmp_weight" "$f"
+    done
+    rm -f "$tmp_weight"
+else
+    log_info "[DRY-RUN] Would apply Autocycler weighting tags to plassembler/canu/flye/hifiasm FASTA headers."
+fi
 shopt -u nullglob
 
 # --- 9f. Cleanup ---
@@ -412,6 +416,7 @@ fi # End resume skip for cluster stage
 # Large clusters (>= 2 MB GFA): MUMmer nucmer + mummerplot (chromosome-scale)
 generate_dotplots() {
     local cluster_dir="$1"
+    # NOTE: cname is inherited from the caller's loop scope (not passed as arg)
     local gfa_untrimmed="${cluster_dir}/1_untrimmed.gfa"
     local gfa_trimmed="${cluster_dir}/2_trimmed.gfa"
     local gfa_size
@@ -427,12 +432,20 @@ generate_dotplots() {
         # Plasmid-scale: Autocycler dotplot (purpose-built for trim verification)
         log_info "  Small cluster — using Autocycler dotplot"
         run_cmd autocycler dotplot -i "${gfa_untrimmed}" -o "${cluster_dir}/1_untrimmed.png"
-        run_cmd autocycler dotplot -i "${gfa_trimmed}"   -o "${cluster_dir}/2_trimmed.png"
+        if [[ -s "${gfa_trimmed}" ]]; then
+            run_cmd autocycler dotplot -i "${gfa_trimmed}" -o "${cluster_dir}/2_trimmed.png"
+        else
+            log_warn "  ${cname}: 2_trimmed.gfa missing or empty — trim may have excluded all sequences. Skipping trimmed dotplot."
+        fi
     elif command -v nucmer &>/dev/null && command -v mummerplot &>/dev/null; then
         # Chromosome-scale: MUMmer (efficient on multi-Mbp sequences)
         log_info "  Large cluster — using MUMmer (nucmer + mummerplot)"
         for tag in 1_untrimmed 2_trimmed; do
             local gfa="${cluster_dir}/${tag}.gfa"
+            if [[ ! -s "${gfa}" ]]; then
+                log_warn "  ${cname}: ${tag}.gfa missing or empty — skipping MUMmer dotplot for this tag."
+                continue
+            fi
             local fasta="${cluster_dir}/${tag}.fasta"
             # Convert GFA to FASTA for nucmer
             run_cmd autocycler gfa2fasta -i "${gfa}" -o "${fasta}"
@@ -515,11 +528,60 @@ for c in "${_clusters[@]}"; do
         touch "${_resolve_log}"
     fi
 
-    _anchors=$(grep 'anchor unitigs found' "${_resolve_log}" | grep -oE '^[0-9]+' || echo "?")
-    _unique=$(grep "Unique bridges:" "${_resolve_log}" | awk '{print $NF}' || echo "?")
-    _conflict=$(grep "Conflicting bridges:" "${_resolve_log}" | awk '{print $NF}' || echo "?")
-    _final_unitigs=$(grep -E '^[0-9]+ unitig' "${_resolve_log}" | tail -1 | grep -oE '^[0-9]+' || echo "?")
-    _total_len=$(grep "^total length:" "${_resolve_log}" | tail -1 | awk '{print $3}' || echo "?")
+    _anchors=$(grep 'anchor unitigs found' "${_resolve_log}" \
+        | awk '{
+            for(i=1; i<=NF; i++) {
+                if($i == "anchor" && i > 1) {
+                    val = $(i-1);
+                    gsub(/,/, "", val);
+                    if(val ~ /^[0-9]+$/) { print val; exit }
+                }
+            }
+        }' || echo "?")
+
+    _unique=$(grep 'Unique bridges:' "${_resolve_log}" \
+        | awk '{
+            for(i=1; i<=NF; i++) {
+                if($i == "Unique" && $(i+1) == "bridges:" && (i+1) < NF) {
+                    val = $(i+2);
+                    gsub(/,/, "", val);
+                    if(val ~ /^[0-9]+$/) { print val; exit }
+                }
+            }
+        }' || echo "?")
+
+    _conflict=$(grep 'Conflicting bridges:' "${_resolve_log}" \
+        | awk '{
+            for(i=1; i<=NF; i++) {
+                if($i == "Conflicting" && $(i+1) == "bridges:" && (i+1) < NF) {
+                    val = $(i+2);
+                    gsub(/,/, "", val);
+                    if(val ~ /^[0-9]+$/) { print val; exit }
+                }
+            }
+        }' || echo "?")
+
+    _final_unitigs=$(grep 'unitig' "${_resolve_log}" | tail -1 \
+        | awk '{
+            for(i=1; i<=NF; i++) {
+                if($i ~ /^unitigs?$/ && i > 1) {
+                    val = $(i-1);
+                    gsub(/,/, "", val);
+                    if(val ~ /^[0-9]+$/) { print val; exit }
+                }
+            }
+        }' || echo "?")
+
+    _total_len=$(grep 'total length:' "${_resolve_log}" | tail -1 \
+        | awk '{
+            for(i=1; i<=NF; i++) {
+                if($i == "length:" && i > 1 && $(i-1) == "total" && i < NF) {
+                    val = $(i+1);
+                    gsub(/,/, "", val);
+                    if(val ~ /^[0-9]+$/) { print val; exit }
+                }
+            }
+        }' || echo "?")
 
     log_info "  Resolve: ${_anchors} anchors, ${_unique} unique / ${_conflict} conflicting bridges"
     log_info "  Result: ${_final_unitigs} unitig(s), total length: ${_total_len}"
@@ -645,7 +707,6 @@ fi
 
 log_step "9p. Read-depth assessment"
 depth_report="$(pwd)/contig_depths.tsv"
-characteristics_report="$(pwd)/contig_characteristics.tsv"
 
 if [[ -s "${depth_report}" ]]; then
     log_info "Found existing depth report. Skipping read-depth assessment..."
@@ -659,11 +720,16 @@ else
     esac
 
     log_info "Mapping input reads to consensus (preset: ${mm2_preset})..."
+    _mm2_threads=$(( threads * 3 / 4 ))
+    _sort_threads=$(( threads / 4 ))
+    [[ ${_mm2_threads} -lt 1 ]] && _mm2_threads=1
+    [[ ${_sort_threads} -lt 1 ]] && _sort_threads=1
+
     run_cmd bash -c '
         set -o pipefail
         minimap2 -t "$1" -a -x "$2" "$3" "$4" \
-            | samtools sort -@ "$1" -o consensus_mapped.bam
-    ' _ "${threads}" "${mm2_preset}" "${autocycler_consensus}" "${input_reads}"
+            | samtools sort -@ "$5" -o consensus_mapped.bam
+    ' _ "${_mm2_threads}" "${mm2_preset}" "${autocycler_consensus}" "${input_reads}" "${_sort_threads}"
 
     run_cmd samtools index consensus_mapped.bam
 
@@ -705,58 +771,29 @@ else
 fi
 
 # ==============================================================================
-# STEP 9q — Contig characteristics summary
+# STEP 9q — Contig depth summary
 # ==============================================================================
 
-log_step "9q. Building contig characteristics summary"
+log_step "9q. Building contig depth summary"
 _cluster_meta="${autocycler_dir}/cluster_metadata.tsv"
 
-# Merge cluster_metadata.tsv (from trim/resolve loop) with contig_depths.tsv
-# Contigs are numbered 1..N in the depth report, clusters in order
-if [[ -f "${_cluster_meta}" && -f "${depth_report}" ]]; then
-    paste <(tail -n +2 "${depth_report}" | nl -ba -w1) \
-          <(tail -n +2 "${_cluster_meta}") \
-        | awk -F'\t' 'BEGIN {
-            OFS="\t"
-            print "contig_num","contig","length_bp","avg_depth","relative_depth","cluster","cluster_distance","median_len","mad","allowed_range","se_trimmed","hp_trimmed","kept","excluded","anchors","unique_bridges","conflicting_bridges","consensus_unitigs","consensus_length"
-        } { print $0 }' > "${characteristics_report}"
-
-    log_info "Contig characteristics: ${characteristics_report}"
-
-    # Print compact summary to log
-    log_info "--- Contig characteristics summary ---"
-    log_info "  #  Length       Cluster  Dist        MAD  Bridges(U/C)  Depth     Rel     Flag"
-    while IFS=$'\t' read -r num contig length avg_depth rel_depth cluster c_dist median mad range se hp kept excl anchors ubr cbr cu cl; do
-        [[ "${num}" =~ ^[0-9] ]] || continue
+if [[ -f "${depth_report}" ]]; then
+    log_info "--- Contig depth summary ---"
+    while IFS=$'\t' read -r contig length avg_depth rel_depth; do
+        [[ "${contig}" == "contig" ]] && continue
         flag=""
-        if (( $(echo "${rel_depth} > 1.5" | bc -l 2>/dev/null || echo 0) )); then
-            flag="← elevated"
+        if awk -v d="${rel_depth}" 'BEGIN{exit (d > 1.5) ? 0 : 1}' 2>/dev/null; then
+            flag=" ← elevated copy number"
         fi
-        printf -v _line "  %-2s %-10s  %-10s %-10s  %-3s  %-12s  %-8s  %-6s  %s" \
-            "${num}" "${length}" "${cluster}" "${c_dist}" "${mad}" "${ubr}/${cbr}" \
-            "${avg_depth}×" "${rel_depth}×" "${flag}"
-        log_info "${_line}"
-    done < <(tail -n +2 "${characteristics_report}")
-else
-    # Fallback: print depth-only summary if cluster metadata not available
-    if [[ -f "${depth_report}" ]]; then
-        log_info "--- Contig depth summary (cluster metadata not available) ---"
-        while IFS=$'\t' read -r contig length avg_depth rel_depth; do
-            [[ "${contig}" == "contig" ]] && continue
-            if (( $(echo "${rel_depth} > 1.5" | bc -l 2>/dev/null || echo 0) )); then
-                log_info "  ${contig} (${length} bp): ${avg_depth}× avg, ${rel_depth}× relative ← elevated copy number"
-            else
-                log_info "  ${contig} (${length} bp): ${avg_depth}× avg, ${rel_depth}× relative"
-            fi
-        done < "${depth_report}"
-    fi
+        log_info "  ${contig} (${length} bp): ${avg_depth}× avg, ${rel_depth}× relative${flag}"
+    done < "${depth_report}"
 fi
 
 log_step "Assembly complete."
 log_info "Consensus: ${autocycler_consensus}"
 log_info "Metrics:   metrics.tsv"
-log_info "Characteristics: ${characteristics_report}"
 log_info "Depths:    ${depth_report}"
+log_info "Cluster metadata: ${_cluster_meta}"
 
 # RagTag scaffolding has been removed from this script and deferred to a
 # dedicated post-assembly scaffolding script (not yet implemented). Avoid a

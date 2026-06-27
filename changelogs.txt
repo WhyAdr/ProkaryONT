@@ -4,6 +4,19 @@ PROKARYONT PIPELINE CHANGELOG
 Date: 2026-06-27
 Author: Antigravity (AI coding assistant)
 
+Summary of Bug-Fixes and Robustness Updates
+-------------------------------------------
+1. Fixed fastplong execution in 02_preprocess_filter.sh to write to its default reports instead of /dev/null, explicitly disabling modifying operations using -Q -L -A.
+2. Added cross-script step references to 02_preprocess_filter.sh and documented EXIT trap behavior.
+3. Fixed dry-run temp file leaks of Autocycler weighting in 03_autocycler_assemble.sh.
+4. Added existence/non-empty guards for trimmed GFAs before calling autocycler dotplot or MUMmer self-map alignments.
+5. Rewrote Autocycler resolve log metrics extraction (anchors, unique/conflicting bridges, unitigs, total length) with robust, keyword-anchored awk parsers.
+6. Apportioned thread counts 3:1 between minimap2 mapping and samtools sort to prevent node oversubscription (2x thread concurrency peak).
+7. Deferred contig characteristics join (deleted contig_characteristics.tsv unified output) and simplified step 9q to log a clean standalone contig depth summary utilizing the new awk exit check float comparison (replacing bc -l dependency).
+
+Date: 2026-06-27
+Author: Antigravity (AI coding assistant)
+
 Summary of Chopper Tweaks
 -------------------------
 1. Upgraded chopper preprocessing to support all 4 Rust-based trimming strategies:
