@@ -211,8 +211,8 @@ if [[ "${enable_fastcat_lint}" == "true" ]]; then
 fi
 
 # ==============================================================================
-# STEP 7 — Filtering with Seqkit + Filtlong (logic unchanged from the original
-# 02_filter_assemble.sh STEP 2 — preserve the rationale comment below verbatim)
+# STEP 7 — Filtering with Seqkit + Filtlong (logic based on the original
+# 02_filter_assemble.sh STEP 2 quality/length filtering)
 # ==============================================================================
 
 log_step "Step 7: Filtering reads (min_qscore=${min_qscore}, min_length=${filtlong_min_length}, keep=${filtlong_keep_percent}%)"

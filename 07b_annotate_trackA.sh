@@ -104,7 +104,7 @@ else
     log_info "No RASTtk GTO provided (--rast-gto). SEED subsystem annotation skipped."
 fi
 
-# --- Sanitize locus tag (same logic as 05_annotate_assess.sh) ----------------
+# --- Sanitize locus tag (same logic as 06_annotate_assess.sh) ----------------
 bakta_locus_tag=$(echo "${sample_name}" | tr -cd '[:alnum:]' | cut -c 1-12)
 [[ ${#bakta_locus_tag} -lt 3 ]] && bakta_locus_tag="LOCUS"
 

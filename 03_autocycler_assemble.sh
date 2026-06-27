@@ -3,9 +3,8 @@
 # 03_autocycler_assemble.sh — Autocycler multi-assembler subsampling & resolution
 # ==============================================================================
 # Usage:
-#   bash 03_autocycler_assemble.sh --read-type ont_r10
-#   (reads filtered_input.fastq.gz produced by 02_preprocess_filter.sh;
-#    does NOT take --input-fastq)
+#   bash 03_autocycler_assemble.sh --read-type ont_r10 [OPTIONS]
+#   (reads filtered_input.fastq.gz by default, or custom reads path via --reads / --input-fastq)
 #
 # Optional flags:
 #   --config FILE           Path to pipeline.conf (values override defaults)
