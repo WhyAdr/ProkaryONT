@@ -34,6 +34,11 @@ subsample.yaml
 # Checkpoints
 .success_*
 
+# Mock testing inputs/binaries
+mock_bin/
+pod5_dir/
+sequencing_summary.txt
+
 # OS / editor
 .DS_Store
 Thumbs.db
