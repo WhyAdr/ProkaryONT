@@ -197,6 +197,9 @@ fi
 
 # ==============================================================================
 # STEP 6b — Fastcat Lint Low-Complexity Filtering (optional)
+# Note: 'lint' (or 'fastlint') is an officially registered fastcat subcommand.
+# It runs the symmetric DUST (SDUST) algorithm (adapted from minimap2) to mask
+# low-complexity regions and skip reads exceeding the max proportion threshold.
 # ==============================================================================
 
 if [[ "${enable_fastcat_lint}" == "true" ]]; then
