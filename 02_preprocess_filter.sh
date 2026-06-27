@@ -18,6 +18,10 @@
 #   --tailcrop N                  Chopper fixed-crop: bases to crop from read end (default: 30)
 #   --chopper-trim-cutoff N       Chopper quality cutoff/threshold (required for quality-aware modes)
 #   --split-window N              Chopper split-by-low-quality: consecutive bad bases to trigger split (default: 1)
+#   --enable-fastcat-lint         Enable Fastcat lint low-complexity filtering (default: off)
+#   --lint-threshold N            Fastcat lint: DUST threshold T (default: 20)
+#   --lint-window N               Fastcat lint: DUST window size W (default: 64)
+#   --lint-max-proportion N       Fastcat lint: max tolerated masked fraction to keep read (default: 0.95)
 #   --dry-run                     Print commands without executing
 #   --help                        Show this help
 # ==============================================================================
