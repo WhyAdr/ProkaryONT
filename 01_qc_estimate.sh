@@ -78,6 +78,9 @@ require_tool NanoPlot
 require_tool lrge
 require_tool raven
 require_tool meryl
+require_tool fastcat
+require_tool porechop_abi
+require_tool snikt.R
 
 # --- Derived paths -----------------------------------------------------------
 qc_dir="$(pwd)/01_qc"
@@ -113,7 +116,38 @@ fi
 log_info ">>> CHECK: Open ${qc_dir}/NanoPlot_sample/NanoPlot-report.html"
 
 # ==============================================================================
-# STEP 3 — Genome Size Estimation (Note: Step 2 is in 02_filter_assemble.sh)
+# STEP 2 — Preprocessing Diagnostics: Fastcat, Porechop_ABI Scan & SNIKT
+# ==============================================================================
+
+log_step "Step 2: Preprocessing diagnostics"
+
+# --- Fastcat: fast per-file stats + length/quality histograms ---------------
+log_info "Running Fastcat per-file summary statistics..."
+mkdir -p "${qc_dir}/fastcat_histograms"
+run_cmd bash -c 'fastcat --histograms "$1" -f "$2" "$3" > /dev/null' \
+    _ "${qc_dir}/fastcat_histograms" "${qc_dir}/fastcat_per_file_stats.tsv" "${input_fastq}"
+
+# --- Porechop_ABI: ab-initio adapter discovery scan (report only) -----------
+log_info "Running Porechop_ABI ab-initio adapter discovery (report only, no trimming)..."
+# NOTE: Porechop_ABI is not barcode-aware by design (its own docs say
+# demultiplexing should be handled upstream). Its ab-initio module detects
+# over-represented k-mers at read termini agnostically, though, so it may
+# incidentally flag residual barcode sequence sitting just inside the
+# adapter boundary as a side effect — treat any such hits as a bonus, not
+# a guaranteed capability.
+run_cmd bash -c 'porechop_abi -abi --guess_adapter_only -i "$1" --threads "$2" > "$3" 2>&1' \
+    _ "${input_fastq}" "${threads}" "${qc_dir}/porechop_abi_scan.log"
+
+# --- SNIKT: baseline systemic end-bias report (pre-trim) --------------------
+log_info "Running SNIKT baseline contamination check (--notrim, diagnostic only)..."
+mkdir -p "${qc_dir}/snikt_baseline"
+run_cmd bash -c 'cd "$1" && snikt.R --notrim "$2"' \
+    _ "${qc_dir}/snikt_baseline" "${input_fastq}"
+
+log_info ">>> CHECK: Review ${qc_dir}/fastcat_per_file_stats.tsv, porechop_abi_scan.log, snikt_baseline/ — these inform whether Stage 2 trimming is warranted"
+
+# ==============================================================================
+# STEP 3 — Genome Size Estimation
 # ==============================================================================
 
 log_step "Step 3: Genome size estimation"
@@ -157,8 +191,9 @@ fi
 
 log_info "Running Meryl k-mer counting..."
 if [[ -z "${meryl_memory}" ]]; then
-    meryl_memory=$(free -g 2>/dev/null | awk '/^Mem:/{print ($7 != "" ? $7 : $4)}')
+    meryl_memory=$( { free -g 2>/dev/null || echo "Mem: 0 0 0 0 0 0 16"; } | awk '/^Mem:/{print ($7 != "" ? $7 : $4)}')
     meryl_memory="${meryl_memory:-16}"
+    [[ "${meryl_memory}" -eq 0 ]] && meryl_memory=16
 fi
 
 if [[ -d "${genome_size_dir}/genome.meryl" ]]; then
@@ -182,3 +217,4 @@ log_info "Raven size:     ${raven_size:-N/A} bp"
 log_info "Mean (Weight):  ${mean_genome_size:-N/A} bp"
 log_info "NanoPlot:       ${qc_dir}/"
 log_info "Meryl db:       ${genome_size_dir}/genome.meryl"
+log_info "Diagnostics:    ${qc_dir}/ (fastcat_per_file_stats.tsv / porechop_abi_scan.log / snikt_baseline/)"

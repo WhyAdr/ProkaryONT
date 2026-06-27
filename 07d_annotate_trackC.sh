@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# 06d_annotate_trackC.sh — Track C: Prophage detection & gene calling
+# 07d_annotate_trackC.sh — Track C: Prophage detection & gene calling
 # ==============================================================================
 # Usage:
-#   bash 06d_annotate_trackC.sh --assembly polished.fasta --genomad-db /db/genomad
+#   bash 07d_annotate_trackC.sh --assembly polished.fasta --genomad-db /db/genomad
 #
 # Runs geNomad to detect prophage regions, extracts them, then runs Phanotate
 # for phage-optimised gene prediction on those regions only.
@@ -152,4 +152,4 @@ if [[ -f "${provirus_summary}" ]]; then
     log_info "Summary:    ${provirus_summary}"
 fi
 log_info ""
-log_info ">>> NEXT: Run 06e_reconcile_merge.sh to integrate prophage genes into the final annotation."
+log_info ">>> NEXT: Run 07e_reconcile_merge.sh to integrate prophage genes into the final annotation."

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# 06e_reconcile_merge.sh — Reconcile & merge all annotation evidence
+# 07e_reconcile_merge.sh — Reconcile & merge all annotation evidence
 # ==============================================================================
 # Usage:
-#   bash 06e_reconcile_merge.sh --assembly polished.fasta \
+#   bash 07e_reconcile_merge.sh --assembly polished.fasta \
 #       --consensus-gff consensus_genes.gff3 --bakta-dir 14_trackA/bakta
 #
 # Merges gene predictions from Track B consensus with functional annotations
@@ -92,8 +92,8 @@ require_arg "--assembly" "${assembly}"
 require_arg "--consensus-gff" "${consensus_gff}"
 require_arg "--bakta-dir" "${bakta_dir}"
 require_file "${assembly}"
-require_file "${consensus_gff}" "06a_predict_genes.sh"
-require_dir "${bakta_dir}" "06b_annotate_trackA.sh"
+require_file "${consensus_gff}" "07a_predict_genes.sh"
+require_dir "${bakta_dir}" "07b_annotate_trackA.sh"
 
 require_tool python3
 

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# 04_taxonomy.sh — Taxonomic classification, MLST typing & 16S extraction
+# 05_taxonomy.sh — Taxonomic classification, MLST typing & 16S extraction
 # ==============================================================================
 # Usage:
-#   bash 04_taxonomy.sh --assembly reoriented.fasta --gtdbtk-db /db/gtdbtk
+#   bash 05_taxonomy.sh --assembly reoriented.fasta --gtdbtk-db /db/gtdbtk
 #
 # Optional flags:
 #   --config FILE            Path to pipeline.conf (values override defaults)
@@ -59,7 +59,7 @@ done
 # --- Validate ----------------------------------------------------------------
 require_arg "--assembly" "${assembly}"
 require_arg "--gtdbtk-db" "${gtdbtk_data_path}"
-require_file "${assembly}" "03_polish_orient.sh"
+require_file "${assembly}" "04_polish_orient.sh"
 
 require_tool gtdbtk
 
@@ -71,10 +71,10 @@ done
 taxonomy_dir="$(pwd)/07_taxonomy"
 
 # ==============================================================================
-# STEP 7a — GTDB-Tk Classification
+# STEP 12a — GTDB-Tk Classification
 # ==============================================================================
 
-log_step "Step 7a: GTDB-Tk classification"
+log_step "Step 12a: GTDB-Tk classification"
 
 [[ -n "${gtdbtk_data_path}" ]] && export GTDBTK_DATA_PATH="${gtdbtk_data_path}"
 
@@ -96,14 +96,14 @@ if [[ -z "${dry_run:-}" ]] && ls "${taxonomy_dir}"/gtdbtk.*.summary.tsv 1> /dev/
     fi
 fi
 
-log_info "    Update genus/species/gram in pipeline.conf before running 05_annotate_assess.sh."
+log_info "    Update genus/species/gram in pipeline.conf before running 06_annotate_assess.sh."
 
 # ==============================================================================
-# STEP 7b — MLST Typing
+# STEP 12b — MLST Typing
 # ==============================================================================
 
 if command -v mlst &>/dev/null; then
-    log_step "Step 7b: MLST typing"
+    log_step "Step 12b: MLST typing"
 
     run_cmd mlst "${assembly}" \
         | tee "${taxonomy_dir}/mlst_result.tsv"
@@ -115,11 +115,11 @@ else
 fi
 
 # ==============================================================================
-# STEP 7c — Barrnap 16S rRNA Extraction
+# STEP 12c — Barrnap 16S rRNA Extraction
 # ==============================================================================
 
 if command -v barrnap &>/dev/null; then
-    log_step "Step 7c: Barrnap 16S rRNA extraction"
+    log_step "Step 12c: Barrnap 16S rRNA extraction"
 
     log_info "Predicting rRNA genes..."
     run_cmd barrnap --threads "${threads}" --kingdom "${barrnap_kingdom}" \
@@ -151,4 +151,4 @@ log_info "GTDB-Tk:   ${taxonomy_dir}/"
 log_info "MLST:      ${taxonomy_dir}/mlst_result.tsv"
 log_info "16S rRNA:  ${taxonomy_dir}/16S_only.fasta"
 log_info ""
-log_info ">>> NEXT: Review results, update genus/species/gram in config, then run 05_annotate_assess.sh"
+log_info ">>> NEXT: Review results, update genus/species/gram in config, then run 06_annotate_assess.sh"

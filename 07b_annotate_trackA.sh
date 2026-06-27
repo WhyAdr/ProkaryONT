@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# 06b_annotate_trackA.sh — Track A: Full-pipeline annotators
+# 07b_annotate_trackA.sh — Track A: Full-pipeline annotators
 # ==============================================================================
 # Usage:
-#   bash 06b_annotate_trackA.sh --assembly polished.fasta --bakta-db /db/bakta
+#   bash 07b_annotate_trackA.sh --assembly polished.fasta --bakta-db /db/bakta
 #
 # Runs Bakta (hard requirement) and DRAM (soft) on the assembly.
 # Imports RASTtk results from a manual webserver run if provided.
@@ -209,5 +209,5 @@ if [[ "${has_dram}" == "true" ]]; then
     log_info "DRAM:    ${dram_dir}/"
 fi
 log_info ""
-log_info ">>> NEXT: Also run 06c_annotate_trackB.sh and 06d_annotate_trackC.sh"
-log_info "         Then run 06e_reconcile_merge.sh to merge all results."
+log_info ">>> NEXT: Also run 07c_annotate_trackB.sh and 07d_annotate_trackC.sh"
+log_info "         Then run 07e_reconcile_merge.sh to merge all results."

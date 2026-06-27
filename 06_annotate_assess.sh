@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# 05_annotate_assess.sh — Annotation & assembly quality assessment
+# 06_annotate_assess.sh — Annotation & assembly quality assessment
 # ==============================================================================
 # Usage:
-#   bash 05_annotate_assess.sh --assembly reoriented.fasta --bakta-db /db/bakta
+#   bash 06_annotate_assess.sh --assembly reoriented.fasta --bakta-db /db/bakta
 #
 # Optional flags:
 #   --threads N              Number of threads (default: 128)
@@ -80,7 +80,7 @@ done
 # --- Validate ----------------------------------------------------------------
 require_arg "--assembly" "${assembly}"
 require_arg "--bakta-db" "${bakta_db}"
-require_file "${assembly}" "03_polish_orient.sh"
+require_file "${assembly}" "04_polish_orient.sh"
 
 require_tool bakta
 
@@ -99,10 +99,10 @@ bakta_locus_tag=$(echo "${sample_name}" | tr -cd '[:alnum:]' | cut -c 1-12)
 [[ ${#bakta_locus_tag} -lt 3 ]] && bakta_locus_tag="LOCUS"
 
 # ==============================================================================
-# STEP 8 — Bakta Annotation
+# STEP 13 — Bakta Annotation
 # ==============================================================================
 
-log_step "Step 8: Bakta annotation (${bakta_genus} ${bakta_species}, gram=${bakta_gram}, locus=${bakta_locus_tag})"
+log_step "Step 13: Bakta annotation (${bakta_genus} ${bakta_species}, gram=${bakta_gram}, locus=${bakta_locus_tag})"
 
 run_cmd bakta \
     --db "${bakta_db}" \
@@ -121,11 +121,11 @@ run_cmd bakta \
 log_info ">>> CHECK: Review bakta_result/ for GFF3, GenBank, and summary files."
 
 # ==============================================================================
-# STEP 9 — QUAST Assembly Statistics
+# STEP 14 — QUAST Assembly Statistics
 # ==============================================================================
 
 if command -v quast &>/dev/null; then
-    log_step "Step 9: QUAST assembly statistics"
+    log_step "Step 14: QUAST assembly statistics"
 
     mkdir -p "${quast_dir}"
     run_cmd quast "${assembly}" \
@@ -145,11 +145,11 @@ else
 fi
 
 # ==============================================================================
-# STEP 10 — CheckM2 Completeness & Contamination
+# STEP 15 — CheckM2 Completeness & Contamination
 # ==============================================================================
 
 if command -v checkm2 &>/dev/null; then
-    log_step "Step 10: CheckM2 completeness & contamination"
+    log_step "Step 15: CheckM2 completeness & contamination"
 
     mkdir -p "${checkm2_dir}/genomes"
     cp "${assembly}" "${checkm2_dir}/genomes/"
@@ -172,11 +172,11 @@ else
 fi
 
 # ==============================================================================
-# STEP 11 — BUSCO
+# STEP 16 — BUSCO
 # ==============================================================================
 
 if command -v busco &>/dev/null; then
-    log_step "Step 11: BUSCO assessment (lineage=${busco_lineage})"
+    log_step "Step 16: BUSCO assessment (lineage=${busco_lineage})"
 
     run_cmd busco \
         -i "${assembly}" \
@@ -206,10 +206,10 @@ else
 fi
 
 # ==============================================================================
-# STEP 12 — Merqury QV Assessment
+# STEP 17 — Merqury QV Assessment
 # ==============================================================================
 
-log_step "Step 12: Merqury assessment"
+log_step "Step 17: Merqury assessment"
 
 if [[ -z "${merqury_path}" ]]; then
     log_warn "No --merqury-path provided. Skipping Merqury."

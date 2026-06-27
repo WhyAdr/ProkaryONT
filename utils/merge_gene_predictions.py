@@ -3,7 +3,7 @@
 merge_gene_predictions.py — Merge gene predictions from multiple callers
                             into a consensus gene set.
 
-Usage (called by 06a_predict_genes.sh):
+Usage (called by 07a_predict_genes.sh):
     python3 merge_gene_predictions.py \
         --assembly genome.fasta \
         --pyrodigal-gff pyrodigal.gff \

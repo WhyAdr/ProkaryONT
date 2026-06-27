@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# 06a_predict_genes.sh — Multi-caller gene prediction & consensus merging
+# 07a_predict_genes.sh — Multi-caller gene prediction & consensus merging
 # ==============================================================================
 # Usage:
-#   bash 06a_predict_genes.sh --assembly polished.fasta
+#   bash 07a_predict_genes.sh --assembly polished.fasta
 #
 # Runs Pyrodigal and Glimmer3, optionally imports GeneMarkS-2 predictions,
 # then merges gene calls into a consensus set using majority vote (default)
@@ -63,7 +63,7 @@ done
 
 # --- Validate ----------------------------------------------------------------
 require_arg "--assembly" "${assembly}"
-require_file "${assembly}" "03_polish_orient.sh or 05_annotate_assess.sh"
+require_file "${assembly}" "04_polish_orient.sh or 06_annotate_assess.sh"
 
 # Validate merge mode
 if [[ "${gene_merge_mode}" != "majority" && "${gene_merge_mode}" != "union" ]]; then
@@ -233,6 +233,6 @@ log_info "Consensus FAA: ${consensus_dir}/consensus_proteins.faa"
 log_info "Consensus FNA: ${consensus_dir}/consensus_cds.fna"
 log_info "Merge log:     ${consensus_dir}/gene_merge.log"
 log_info ""
-log_info ">>> NEXT: Run 06b_annotate_trackA.sh (assembly-level annotation)"
-log_info "         Run 06c_annotate_trackB.sh --consensus-proteins ${consensus_dir}/consensus_proteins.faa"
-log_info "         Run 06d_annotate_trackC.sh (prophage detection)"
+log_info ">>> NEXT: Run 07b_annotate_trackA.sh (assembly-level annotation)"
+log_info "         Run 07c_annotate_trackB.sh --consensus-proteins ${consensus_dir}/consensus_proteins.faa"
+log_info "         Run 07d_annotate_trackC.sh (prophage detection)"

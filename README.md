@@ -8,30 +8,31 @@ It orchestrates industry-standard bioinformatics tools via a robust, subcommand-
 
 ## 🗺️ Pipeline Overview
 
-The pipeline is split into three main execution phases: **Core Assembly & Polishing (Stages 1–3)**, **Primary Downstream Analysis (Taxonomy & Single-Tool Annotation)**, and an **Ensemble Annotation & Reconcilation Pipeline**.
+The pipeline is split into three main execution phases: **Core Assembly & Polishing (Stages 1–4)**, **Primary Downstream Analysis (Taxonomy & Single-Tool Annotation)**, and an **Ensemble Annotation & Reconcilation Pipeline**.
 
 ```mermaid
 graph TD
-    A[Raw ONT FASTQ + Summary] --> Stage1[Stage 1: QC & Estimate<br/>NanoPlot / LRGE / Raven / Meryl]
-    Stage1 --> Stage2[Stage 2: Filter & Assemble<br/>Filtlong / SeqKit / Autocycler]
-    Stage2 --> C1{"🔍 Curation 1: Assemblies"}
+    A[Raw ONT FASTQ + Summary] --> Stage1[Stage 1: QC & Estimate<br/>NanoPlot / LRGE / Raven / Meryl<br/>+ Fastcat / Porechop_ABI scan / SNIKT]
+    Stage1 --> Stage2[Stage 2: Preprocess & Filter<br/>Porechop_ABI / Chopper / Seqkit / Filtlong<br/>+ Fastplong QC report]
+    Stage2 --> Stage3[Stage 3: Autocycler Assembly]
+    Stage3 --> C1{"🔍 Curation 1: Assemblies"}
     C1 --> Stage2b[Clustering & tree QC<br/>autocycler cluster / ETE3]
     Stage2b --> C2{"🔍 Curation 2: Clusters"}
     C2 --> Stage2c[Trim, Resolve & Combine<br/>autocycler trim/resolve/combine / MUMmer]
     Stage2c --> C3{"🔍 Curation 3: Dotplots"}
     C3 --> Stage2d[Consensus Assembly + Depth Mapping]
-    Stage2d --> Stage3[Stage 3: Polish & Orient<br/>Dorado Polishing / Dnaapler Reorientation]
-    Stage3 --> FinalAssembly[Final Assembly: dnaapler_reoriented.fasta]
+    Stage2d --> Stage4[Stage 4: Polish & Orient<br/>Dorado Polishing / Dnaapler Reorientation]
+    Stage4 --> FinalAssembly[Final Assembly: dnaapler_reoriented.fasta]
     
     FinalAssembly --> TaxStage[Taxonomy Stage<br/>GTDB-Tk / mlst / Barrnap 16S]
     FinalAssembly --> AssessStage[Assess & Annotate Stage<br/>Bakta / QUAST / CheckM2 / BUSCO / Merqury]
     
     FinalAssembly --> EnsembleStage[Ensemble Annotation Pipeline]
-    EnsembleStage --> 06a[06a: Gene Prediction<br/>Pyrodigal / Glimmer3 / GeneMarkS-2]
-    EnsembleStage --> 06b[06b: Track A Annotation<br/>Bakta / DRAM / RASTtk]
-    EnsembleStage --> 06c[06c: Track B Annotation<br/>eggNOG-mapper / InterProScan / KofamScan / DIAMOND SwissProt]
-    EnsembleStage --> 06d[06d: Track C Annotation<br/>geNomad / Phanotate]
-    06a & 06b & 06c & 06d --> 06e[06e: Reconcile & Merge<br/>GFF3 / TSV / GenBank / JSON]
+    EnsembleStage --> 07a[07a: Gene Prediction<br/>Pyrodigal / Glimmer3 / GeneMarkS-2]
+    EnsembleStage --> 07b[07b: Track A Annotation<br/>Bakta / DRAM / RASTtk]
+    EnsembleStage --> 07c[07c: Track B Annotation<br/>eggNOG-mapper / InterProScan / KofamScan / DIAMOND SwissProt]
+    EnsembleStage --> 07d[07d: Track C Annotation<br/>geNomad / Phanotate]
+    07a & 07b & 07c & 07d --> 07e[07e: Reconcile & Merge<br/>GFF3 / TSV / GenBank / JSON]
 ```
 
 ---
@@ -59,7 +60,7 @@ graph TD
 To run the pipeline, ensure the following tools are available in your `$PATH`:
 
 ### Phase 1: Assembly & Polishing
-- **Filtering & QC**: `filtlong`, `seqkit`, `NanoPlot`
+- **Filtering & QC**: `filtlong`, `seqkit`, `NanoPlot`, `fastcat`, `porechop_abi`, `snikt.R`, `chopper`, `fastplong`
 - **Draft Estimation**: `lrge`, `raven`
 - **Subsampling & Assembly**: `autocycler` (v0.1.0+), `meryl`, `samtools`, GNU `parallel`, and desired assemblers (`flye`, `canu`, `hifiasm`, `metaMDBG`, `miniasm`, `minipolish`, `minimap2`, `plassembler`, etc.)
 - **Tree Analysis**: Python 3 with `ete3` library (optional)
@@ -111,7 +112,7 @@ chmod +x prokaryont.sh
 ./prokaryont.sh --help
 ```
 
-### 1. Full Automated Assembly (Stages 1–3)
+### 1. Full Automated Assembly (Stages 1–4)
 Runs read QC, filtering, multi-assembler subsampling, clustering, consensus combination, dorado polishing, and dnaapler reorientation.
 ```bash
 ./prokaryont.sh assemble --config pipeline.conf
@@ -126,6 +127,7 @@ If the pipeline halts during assembly or you wish to adjust parameters, you can 
 ./prokaryont.sh assemble --config pipeline.conf --resume-from [cluster|trim|dnaapler]
 ```
 - `cluster`: Skips read filtering and assemblies, resumes from Autocycler clustering.
+  (post-split: resumes Stage 3 from clustering, skipping the subsample/multi-assembler step — assumes `filtered_input.fastq.gz` from Stage 2 already exists)
 - `trim`: Skips assembly and clustering, resumes from Autocycler overlap trimming/resolving.
 - `dnaapler`: Skips polishing, resumes from Dnaapler reorientation.
 
@@ -147,19 +149,19 @@ For high-fidelity structural and functional annotation, run the ensemble scripts
 
 ```bash
 # A. Predict consensus gene coordinates
-bash 06a_predict_genes.sh --assembly dnaapler_reoriented.fasta --config pipeline.conf
+bash 07a_predict_genes.sh --assembly dnaapler_reoriented.fasta --config pipeline.conf
 
 # B. Run assembly-level annotations (Track A)
-bash 06b_annotate_trackA.sh --assembly dnaapler_reoriented.fasta --bakta-db /path/to/bakta_db
+bash 07b_annotate_trackA.sh --assembly dnaapler_reoriented.fasta --bakta-db /path/to/bakta_db
 
 # C. Run protein-level sequential annotations (Track B)
-bash 06c_annotate_trackB.sh --consensus-proteins 13_gene_prediction/consensus/consensus_proteins.faa --config pipeline.conf
+bash 07c_annotate_trackB.sh --consensus-proteins 13_gene_prediction/consensus/consensus_proteins.faa --config pipeline.conf
 
 # D. Run prophage annotation (Track C)
-bash 06d_annotate_trackC.sh --assembly dnaapler_reoriented.fasta --genomad-db /path/to/genomad_db
+bash 07d_annotate_trackC.sh --assembly dnaapler_reoriented.fasta --genomad-db /path/to/genomad_db
 
 # E. Reconcile and merge all annotation files
-bash 06e_reconcile_merge.sh \
+bash 07e_reconcile_merge.sh \
     --assembly dnaapler_reoriented.fasta \
     --consensus-gff 13_gene_prediction/consensus/consensus_genes.gff3 \
     --bakta-dir 14_trackA/bakta \

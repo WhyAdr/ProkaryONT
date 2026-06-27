@@ -53,7 +53,10 @@ require_arg "sample_name (in config)" "${sample_name:-}"
 # --- Build common flags ------------------------------------------------------
 common_flags=()
 [[ -n "${dry_run:-}" ]] && common_flags+=(--dry-run)
-[[ -n "${skip_curation:-}" ]] && common_flags+=(--skip-curation)
+
+# Build skip curation flags (only passed to scripts supporting curation)
+curation_flags=()
+[[ -n "${skip_curation:-}" ]] && curation_flags+=(--skip-curation)
 
 pipeline_start=$(date +%s)
 
@@ -86,45 +89,79 @@ log_info "Stage 1 completed in $(( $(date +%s) - stage_start ))s"
 echo ""
 
 # ==============================================================================
-# Stage 2 — Filter & Assemble
+# Stage 2 — Preprocess & Filter
 # ==============================================================================
 
 stage_start=$(date +%s)
-log_step ">>> Stage 2: Filtering & assembly"
+log_step ">>> Stage 2: Preprocessing & filtering"
 
-filter_flags=(
+preprocess_flags=(
     --config "${config_file}"
     --input-fastq "${input_fastq}"
     --threads "${threads:-128}"
-    --read-type "${read_type:-ont_r10}"
-    --sample-name "${sample_name}"
     --min-length "${filtlong_min_length:-200}"
     --min-qscore "${min_qscore:-7}"
     --keep-percent "${filtlong_keep_percent:-90}"
-    --subsample-count "${subsample_count:-4}"
-    --parallel-jobs "${parallel_jobs:-4}"
-    --canu-parallel-jobs "${canu_parallel_jobs:-2}"
 )
-[[ -n "${genome_size_override:-}" ]] && filter_flags+=(--genome-size "${genome_size_override}")
-[[ -n "${min_read_depth:-}" ]]      && filter_flags+=(--min-read-depth "${min_read_depth}")
+[[ "${enable_porechopabi_trim:-}" == "true" ]] && preprocess_flags+=(--enable-porechopabi-trim)
+if [[ "${enable_chopper_trim:-}" == "true" ]]; then
+    preprocess_flags+=(
+        --enable-chopper-trim
+        --chopper-trim-approach "${chopper_trim_approach:-fixed-crop}"
+        --headcrop "${chopper_headcrop:-50}"
+        --tailcrop "${chopper_tailcrop:-30}"
+    )
+    [[ -n "${chopper_trim_cutoff:-}" ]] && preprocess_flags+=(--chopper-trim-cutoff "${chopper_trim_cutoff}")
+    [[ -n "${chopper_split_window:-}" ]] && preprocess_flags+=(--split-window "${chopper_split_window}")
+fi
+[[ "${enable_fastcat_lint:-}" == "true" ]]     && preprocess_flags+=(--enable-fastcat-lint --lint-threshold "${lint_threshold:-20}" --lint-window "${lint_window:-64}" --lint-max-proportion "${lint_max_proportion:-0.95}")
 
-if ! bash "${script_dir}/02_filter_assemble.sh" \
-    "${filter_flags[@]}" \
+if ! bash "${script_dir}/02_preprocess_filter.sh" \
+    "${preprocess_flags[@]}" \
     "${common_flags[@]+"${common_flags[@]}"}"; then
-    log_error "02_filter_assemble.sh failed. Pipeline aborted."
+    log_error "02_preprocess_filter.sh failed. Pipeline aborted."
 fi
 
 log_info "Stage 2 completed in $(( $(date +%s) - stage_start ))s"
 echo ""
 
 # ==============================================================================
-# Stage 3 — Polish & Orient
+# Stage 3 — Autocycler Assembly
 # ==============================================================================
 
 stage_start=$(date +%s)
-log_step ">>> Stage 3: Polishing & reorientation"
+log_step ">>> Stage 3: Assembly"
 
-if ! bash "${script_dir}/03_polish_orient.sh" \
+assemble_flags=(
+    --config "${config_file}"
+    --threads "${threads:-128}"
+    --read-type "${read_type:-ont_r10}"
+    --sample-name "${sample_name}"
+    --subsample-count "${subsample_count:-4}"
+    --parallel-jobs "${parallel_jobs:-4}"
+    --canu-parallel-jobs "${canu_parallel_jobs:-2}"
+)
+[[ -n "${genome_size_override:-}" ]] && assemble_flags+=(--genome-size "${genome_size_override}")
+[[ -n "${min_read_depth:-}" ]]      && assemble_flags+=(--min-read-depth "${min_read_depth}")
+
+if ! bash "${script_dir}/03_autocycler_assemble.sh" \
+    "${assemble_flags[@]}" \
+    "${common_flags[@]+"${common_flags[@]}"}" \
+    "${curation_flags[@]+"${curation_flags[@]}"}"; then
+    log_error "03_autocycler_assemble.sh failed. Pipeline aborted."
+fi
+
+log_info "Stage 3 completed in $(( $(date +%s) - stage_start ))s"
+echo ""
+
+# ==============================================================================
+# Stage 4 — Polish & Orient
+# ==============================================================================
+
+stage_start=$(date +%s)
+log_step ">>> Stage 4: Polishing & reorientation"
+
+if ! bash "${script_dir}/04_polish_orient.sh" \
     --config "${config_file}" \
     --assembly autocycler_out/consensus_assembly.fasta \
     --pod5-dir "${pod5_dir}" \
@@ -132,11 +169,12 @@ if ! bash "${script_dir}/03_polish_orient.sh" \
     --sample-name "${sample_name}" \
     --dorado-model "${dorado_model:-sup}" \
     --min-qscore "${dorado_min_qscore:-7}" \
-    "${common_flags[@]+"${common_flags[@]}"}"; then
-    log_error "03_polish_orient.sh failed. Pipeline aborted."
+    "${common_flags[@]+"${common_flags[@]}"}" \
+    "${curation_flags[@]+"${curation_flags[@]}"}"; then
+    log_error "04_polish_orient.sh failed. Pipeline aborted."
 fi
 
-log_info "Stage 3 completed in $(( $(date +%s) - stage_start ))s"
+log_info "Stage 4 completed in $(( $(date +%s) - stage_start ))s"
 echo ""
 
 # ==============================================================================
@@ -163,6 +201,6 @@ log_info "  Metrics:      metrics.tsv"
 log_info "  Log:          ${log_file}"
 log_info ""
 log_info "Next steps (run manually):"
-log_info "  1. bash scripts/04_taxonomy.sh --config scripts/pipeline.conf"
+log_info "  1. bash scripts/05_taxonomy.sh --config scripts/pipeline.conf"
 log_info "  2. Review taxonomy, update genus/species/gram in pipeline.conf"
-log_info "  3. bash scripts/05_annotate_assess.sh --assembly dnaapler_reoriented.fasta --bakta-db /path/to/bakta_db"
+log_info "  3. bash scripts/06_annotate_assess.sh --assembly dnaapler_reoriented.fasta --bakta-db /path/to/bakta_db"

@@ -2,7 +2,7 @@
 """
 reconcile_annotations.py — Reconcile multi-source annotations into unified output.
 
-Usage (called by 06e_reconcile_merge.sh):
+Usage (called by 07e_reconcile_merge.sh):
     python3 reconcile_annotations.py \
         --assembly genome.fasta \
         --consensus-gff consensus_genes.gff3 \

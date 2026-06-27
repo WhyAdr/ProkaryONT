@@ -1,6 +1,94 @@
 PROKARYONT PIPELINE CHANGELOG
 =============================
 
+Date: 2026-06-27
+Author: Antigravity (AI coding assistant)
+
+Summary of Chopper Tweaks
+-------------------------
+1. Upgraded chopper preprocessing to support all 4 Rust-based trimming strategies:
+   `fixed-crop`, `trim-by-quality`, `best-read-segment`, and `split-by-low-quality`.
+2. Changed the CLI key from `--quality` to `--cutoff` in `02_preprocess_filter.sh`
+   to match the custom chopper codebase parameters.
+3. Added the `--split-window` parameter to `02_preprocess_filter.sh` and routed
+   it through `run_all.sh` and `pipeline.conf`.
+4. Formally renamed Step 6 header and log outputs to "Step 6a" to align with "Step 6b" (Fastcat lint).
+
+Date: 2026-06-27
+Author: Antigravity (AI coding assistant)
+
+Summary of Enhancements
+-----------------------
+1. Integrated standalone reads path flexibility into 03_autocycler_assemble.sh
+   supporting both `--reads` and `--input-fastq` aliases.
+2. Improved missing-file error hints in 03_autocycler_assemble.sh validation.
+3. Integrated the NECAT assembler into Stage 3 (assembler_list, require_tool check).
+4. Implemented optional Step 6b (Fastcat lint SDUST low-complexity filtering)
+   in 02_preprocess_filter.sh with native gzip input handling, intermediate
+   uncompressed streaming, and dedicated reject log (01_qc/02_lint_rejected.log).
+5. Forwarded Fastcat lint options through run_all.sh and added documentation
+   keys to pipeline.conf.
+
+Date: 2026-06-25
+Author: Antigravity (AI coding assistant)
+
+Summary of Fixes (Post-Code Review)
+-----------------------------------
+1. Fixed input_fastq bug in 03_autocycler_assemble.sh: replaced stale
+   ${input_fastq} reference with ${filtered_reads} at metrics collection.
+2. Replaced grep -oP Perl regexes in 03_autocycler_assemble.sh with POSIX-
+   compliant grep -oE equivalents to eliminate locale warnings on Windows/Git Bash.
+3. Enhanced temp file cleanup in 02_preprocess_filter.sh: implemented a global
+   trap handler on EXIT to clean up all intermediate files (_trim_tmp,
+   _crop_tmp, and _qfilt_tmp) under normal execution or unexpected failure.
+4. Corrected style/indentation of Dorado polishing else-block in 04_polish_orient.sh.
+
+Date: 2026-06-25
+Author: Antigravity (AI coding assistant)
+
+This changelog records the Stage 2/3 pipeline split, full STEP renumbering
+(STEP 1-17 across the core pipeline), and the preprocessing diagnostics
+overhaul: Fastcat/Porechop_ABI/SNIKT diagnostics in Stage 1; optional
+Porechop_ABI trim, SNIKT re-assessment, and optional Chopper end-trim in
+Stage 2; Fastplong demoted to QC-reporting only (its Q-score formula uses a
+flat arithmetic Phred mean with integer truncation, confirmed via source
+read to diverge from Seqkit/Chopper's probability-space mean — not used
+for filtering). RagTag removed pending a dedicated post-assembly script.
+
+Summary of Changes
+------------------
+
+1. 02_filter_assemble.sh → 02_preprocess_filter.sh + 03_autocycler_assemble.sh (Pipeline Split)
+   - Split the monolithic filter+assemble script into two independently
+     runnable stages, handed off via filtered_input.fastq.gz.
+   - Consolidated the previously-duplicated genome-size recovery logic into
+     one block (now STEP 9a).
+   - Removed RagTag scaffolding entirely (was tail of the old script) —
+     deferred to a future dedicated script; --ragtag now logs an explicit
+     no-op warning instead of silently doing nothing.
+   - Renumbered every in-file STEP label across the core pipeline (STEP
+     1-17, see major_overhaul_implementation_plan_REFINED_v2.md §4 for the
+     full map).
+
+2. 01_qc_estimate.sh (Preprocessing Diagnostics)
+   - Added Fastcat (per-file stats + histograms), Porechop_ABI ab-initio
+     discovery scan, and SNIKT baseline contamination report as STEP 2,
+     all hard dependencies (require_tool) of this script going forward.
+
+3. 02_preprocess_filter.sh (Trimming additions)
+   - Added optional Porechop_ABI adapter trimming (STEP 4) and optional
+     Chopper end-trimming via --trim-approach (STEP 6), both off by
+     default and meant to be enabled only after reviewing Stage 1/Stage 2
+     SNIKT and Porechop_ABI diagnostics.
+   - Added SNIKT re-assessment (STEP 5) and Fastplong QC reporting (STEP 8,
+     report-only — see rationale above).
+
+4. run_all.sh / prokaryont.sh (Renumbering)
+   - run_all.sh now orchestrates Stages 1-4. prokaryont.sh usage text and
+     taxonomy/annotate dispatch updated for the 05_/06_ renumbering.
+
+--------------------------------------------------------------------------------
+
 Date: 2026-06-21
 Author: WhyAdr & Antigravity AI Pair Programmer
 

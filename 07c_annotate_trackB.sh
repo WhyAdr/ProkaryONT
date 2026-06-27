@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# 06c_annotate_trackB.sh — Track B: Protein-level sequential annotation
+# 07c_annotate_trackB.sh — Track B: Protein-level sequential annotation
 # ==============================================================================
 # Usage:
-#   bash 06c_annotate_trackB.sh --consensus-proteins consensus_proteins.faa
+#   bash 07c_annotate_trackB.sh --consensus-proteins consensus_proteins.faa
 #
 # Runs eggNOG-mapper, InterProScan, KofamScan, and optionally DIAMOND
 # against SwissProt on the consensus protein set, sequentially.
@@ -66,7 +66,7 @@ done
 
 # --- Validate ----------------------------------------------------------------
 require_arg "--consensus-proteins" "${consensus_proteins}"
-require_file "${consensus_proteins}" "06a_predict_genes.sh"
+require_file "${consensus_proteins}" "07a_predict_genes.sh"
 
 # Hard requirement: eggNOG-mapper
 require_tool emapper.py
@@ -208,5 +208,5 @@ log_info "InterProScan:  ${ips_dir}/"
 log_info "KofamScan:     ${kofam_dir}/"
 log_info "DIAMOND:       ${diamond_dir}/"
 log_info ""
-log_info ">>> NEXT: Also run 06b_annotate_trackA.sh and 06d_annotate_trackC.sh"
-log_info "         Then run 06e_reconcile_merge.sh to merge all results."
+log_info ">>> NEXT: Also run 07b_annotate_trackA.sh and 07d_annotate_trackC.sh"
+log_info "         Then run 07e_reconcile_merge.sh to merge all results."
