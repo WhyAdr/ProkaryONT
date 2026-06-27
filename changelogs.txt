@@ -9,7 +9,7 @@ Summary of Chopper Tweaks
 1. Upgraded chopper preprocessing to support all 4 Rust-based trimming strategies:
    `fixed-crop`, `trim-by-quality`, `best-read-segment`, and `split-by-low-quality`.
 2. Changed the CLI key from `--quality` to `--cutoff` in `02_preprocess_filter.sh`
-   to match the custom chopper codebase parameters.
+   after direct verification against the official Chopper repository.
 3. Added the `--split-window` parameter to `02_preprocess_filter.sh` and routed
    it through `run_all.sh` and `pipeline.conf`.
 4. Formally renamed Step 6 header and log outputs to "Step 6a" to align with "Step 6b" (Fastcat lint).

@@ -13,10 +13,11 @@
 #   --keep-percent N              Filtlong keep percent (default: 90)
 #   --enable-porechopabi-trim     Enable Porechop_ABI adapter trimming (default: off)
 #   --enable-chopper-trim         Enable Chopper end-trimming (default: off — gate on Stage 1/2 SNIKT+Porechop_ABI triage)
-#   --chopper-trim-approach NAME  fixed-crop | trim-by-quality (default: fixed-crop; verify full list via `chopper --help`)
+#   --chopper-trim-approach NAME  fixed-crop | trim-by-quality | best-read-segment | split-by-low-quality (default: fixed-crop)
 #   --headcrop N                  Chopper fixed-crop: bases to crop from read start (default: 50)
 #   --tailcrop N                  Chopper fixed-crop: bases to crop from read end (default: 30)
-#   --chopper-trim-cutoff N       Chopper trim-by-quality cutoff (verify exact chopper flag before use)
+#   --chopper-trim-cutoff N       Chopper quality cutoff/threshold (required for quality-aware modes)
+#   --split-window N              Chopper split-by-low-quality: consecutive bad bases to trigger split (default: 1)
 #   --dry-run                     Print commands without executing
 #   --help                        Show this help
 # ==============================================================================
