@@ -21,6 +21,10 @@
 #   --skip-curation         Skip manual curation pauses
 #   --dry-run               Print commands without executing
 #   --help                  Show this help
+#
+# To pass extra arguments to individual assemblers, set them in pipeline.conf
+# (e.g. flye_extra_args=--meta) or export them before running:
+#   export assembler_args=( [flye]="--meta" [raven]="--graphical-fragment-assembly" )
 # ==============================================================================
 
 source "$(dirname "$0")/00_setup.sh"
@@ -32,10 +36,11 @@ sample_name="${sample_name:-MyBacteria}"
 genome_size_override="${genome_size_override:-}"
 subsample_count="${subsample_count:-4}"
 min_read_depth="${min_read_depth:-}"
+min_depth_rel="${min_depth_rel:-0.1}"
+canu_extra_args="${canu_extra_args:-}"
 parallel_jobs="${parallel_jobs:-4}"
 canu_parallel_jobs="${canu_parallel_jobs:-2}"
 skip_curation="${skip_curation:-}"
-canu_extra_args="${canu_extra_args:-}"
 trim_mad="${trim_mad:-}"
 trim_min_identity="${trim_min_identity:-}"
 config_file="${config_file:-}"
@@ -72,6 +77,7 @@ usage() {
     echo "  --genome-size SIZE          Override genome size (skip re-estimation)"
     echo "  --subsample-count N         Number of read subsamples (default: 4)"
     echo "  --min-read-depth N          Min subset read depth for subsampling (default: 25)"
+    echo "  --min-depth-rel FLOAT       Min relative depth for accepted assemblies (default: 0.1)"
     echo "  --parallel-jobs N           Concurrent assembler jobs (default: 4)"
     echo "  --canu-parallel-jobs N      Concurrent Canu jobs (default: 2)"
     echo "  --trim-mad N                Autocycler trim MAD outlier threshold (default: 5)"
@@ -93,6 +99,7 @@ while [[ $# -gt 0 ]]; do
         --genome-size)        genome_size_override="$2"; shift 2 ;;
         --subsample-count)    subsample_count="$2"; shift 2 ;;
         --min-read-depth)     min_read_depth="$2"; shift 2 ;;
+        --min-depth-rel)      min_depth_rel="$2"; shift 2 ;;
         --parallel-jobs)      parallel_jobs="$2"; shift 2 ;;
         --canu-parallel-jobs) canu_parallel_jobs="$2"; shift 2 ;;
         --trim-mad)           trim_mad="$2"; shift 2 ;;
@@ -106,6 +113,14 @@ done
 
 # --- Load config (CLI flags parsed above take priority) ----------------------
 [[ -n "${config_file}" ]] && load_config "${config_file}"
+
+# Populate assembler_args from config variables if not already set
+for _asm in flye metamdbg miniasm raven plassembler hifiasm myloasm nextdenovo wtdbg2 necat; do
+    _var="${_asm}_extra_args"
+    if [[ -n "${!_var:-}" && -z "${assembler_args[$_asm]:-}" ]]; then
+        assembler_args[$_asm]="${!_var}"
+    fi
+done
 
 # --- Validate read type early (before any expensive work) --------------------
 if [[ ! "${read_type}" =~ ^(ont_r9|ont_r10|pacbio_clr|pacbio_hifi)$ ]]; then
@@ -140,6 +155,11 @@ if [[ -n "${reads_path:-}" ]]; then
 else
     require_file "${input_reads}" "02_preprocess_filter.sh"
 fi
+
+# --- Utility: portable float comparison (replaces bc -l dependency) ----------
+_float_gt() {
+    awk -v v1="$1" -v v2="$2" 'BEGIN{exit (v1+0 > v2+0) ? 0 : 1}' 2>/dev/null
+}
 
 # ==============================================================================
 # STEP 9 — Autocycler Assembly
@@ -177,8 +197,20 @@ if [[ -f "${genome_size_dir}/lrge_output.txt" ]]; then
     log_info "LRGE estimate: $(cat "${genome_size_dir}/lrge_output.txt")"
 fi
 
+# Pre-flight: warn if available bases seem insufficient for subsampling
+if [[ -z "${dry_run:-}" && "${genome_size}" =~ ^[0-9]+$ ]]; then
+    _avail_bases=$(seqkit stats -T "${input_reads}" 2>/dev/null \
+        | awk -F'\t' 'NR==2{print $5}' || echo 0)
+    _min_required=$(awk -v gs="${genome_size}" -v sc="${subsample_count}" \
+        -v md="${min_read_depth:-25}" 'BEGIN{printf "%.0f", gs * sc * md}')
+    if awk -v av="${_avail_bases}" -v req="${_min_required}" \
+        'BEGIN{exit (av+0 < req+0) ? 0 : 1}' 2>/dev/null; then
+        log_warn "Available bases (${_avail_bases}) may be below the minimum required for ${subsample_count} subsamples at ${min_read_depth:-25}× depth (${_min_required} estimated). Assembly may be incomplete."
+    fi
+fi
+
 # --- 9b. Subsample reads ---
-log_info "9b. Subsampling reads (count=${subsample_count})..."
+log_info "9b. Subsampling reads (count=${subsample_count})...."
 subsample_flags=(
     --reads "${input_reads}"
     --out_dir subsampled_reads
@@ -196,17 +228,20 @@ else
     mkdir -p "${assemblies_dir}"
     rm -f "${assemblies_dir}/jobs.txt" "${assemblies_dir}/jobs_canu.txt"
 
+    # --min_depth_rel: accept assemblies from subsamples with >= this fraction
+    # of target depth. Default 0.1 (10%). Lower values tolerate sparser
+    # subsamples but may produce fragmented assemblies.
     for assembler in $(echo "${assembler_list}" | tr ',' '\n' | tr -d ' ' | grep -v 'canu' | sort); do
         extra="${assembler_args[$assembler]:-}"
         for i in $(seq -f "%02g" 1 "${subsample_count}"); do
-            cmd="autocycler helper ${assembler} --reads subsampled_reads/sample_${i}.fastq --out_prefix ${assemblies_dir}/${assembler}_${i} --threads ${threads_per_job} --genome_size ${genome_size} --read_type ${read_type} --min_depth_rel 0.1"
+            cmd="autocycler helper ${assembler} --reads subsampled_reads/sample_${i}.fastq --out_prefix ${assemblies_dir}/${assembler}_${i} --threads ${threads_per_job} --genome_size ${genome_size} --read_type ${read_type} --min_depth_rel ${min_depth_rel}"
             [[ -n "${extra}" ]] && cmd+=" -- ${extra}"
             echo "${cmd}" >> "${assemblies_dir}/jobs.txt"
         done
     done
 
     for i in $(seq -f "%02g" 1 "${subsample_count}"); do
-        cmd="autocycler helper canu --reads subsampled_reads/sample_${i}.fastq --out_prefix ${assemblies_dir}/canu_${i} --threads ${canu_threads_per_job} --genome_size ${genome_size} --read_type ${read_type} --min_depth_rel 0.1"
+        cmd="autocycler helper canu --reads subsampled_reads/sample_${i}.fastq --out_prefix ${assemblies_dir}/canu_${i} --threads ${canu_threads_per_job} --genome_size ${genome_size} --read_type ${read_type} --min_depth_rel ${min_depth_rel}"
         [[ -n "${canu_extra_args}" ]] && cmd+=" -- ${canu_extra_args}"
         echo "${cmd}" >> "${assemblies_dir}/jobs_canu.txt"
     done
@@ -237,6 +272,11 @@ if [[ ${parallel_exit_canu} -ne 0 ]]; then
     fi
     actual_fails=$(awk -F'\t' 'NR>1 && $7!=0 {count++} END {print count+0}' \
         "${assemblies_dir}/joblog_canu.tsv" 2>/dev/null || echo 0)
+    _sigkill_count=$(awk -F'\t' 'NR>1 && $8==9 {count++} END {print count+0}' \
+        "${assemblies_dir}/joblog_canu.tsv" 2>/dev/null || echo 0)
+    if [[ ${_sigkill_count} -gt 0 ]]; then
+        log_warn "${_sigkill_count} Canu job(s) killed by SIGKILL (OOM likely). Consider reducing --canu-parallel-jobs."
+    fi
     if [[ ${parallel_exit_canu} -ge 128 && ${actual_fails} -eq 0 ]]; then
         log_error "GNU parallel killed by signal $(( parallel_exit_canu - 128 )) (likely OOM). Aborting."
     elif [[ ${actual_fails} -gt 0 ]]; then
@@ -267,6 +307,11 @@ if [[ ${parallel_exit_general} -ne 0 ]]; then
     fi
     actual_fails=$(awk -F'\t' 'NR>1 && $7!=0 {count++} END {print count+0}' \
         "${assemblies_dir}/joblog.tsv" 2>/dev/null || echo 0)
+    _sigkill_count=$(awk -F'\t' 'NR>1 && $8==9 {count++} END {print count+0}' \
+        "${assemblies_dir}/joblog.tsv" 2>/dev/null || echo 0)
+    if [[ ${_sigkill_count} -gt 0 ]]; then
+        log_warn "${_sigkill_count} general assembler job(s) killed by SIGKILL (OOM likely). Consider reducing --parallel-jobs."
+    fi
     if [[ ${parallel_exit_general} -ge 128 && ${actual_fails} -eq 0 ]]; then
         log_error "GNU parallel killed by signal $(( parallel_exit_general - 128 )) (likely OOM). Aborting."
     elif [[ ${actual_fails} -gt 0 ]]; then
@@ -298,7 +343,7 @@ shopt -u nullglob
 run_cmd rm -f subsampled_reads/*.fastq
 
 # ==============================================================================
-# CURATION POINT 1 — Inspect assemblies
+# 9g. CURATION POINT 1 — Inspect assemblies
 # ==============================================================================
 
 failed_canu=0
@@ -351,8 +396,8 @@ awk '
 ' "${_cluster_log}" | while IFS= read -r line; do log_info "  $line"; done
 
 _pass_count=$(grep -c "passed QC$" "${_cluster_log}" || true)
-_fail_reasons=$(grep -c "failed QC:" "${_cluster_log}" || true)
-log_info "Clusters passed: ${_pass_count}, QC fail reasons: ${_fail_reasons}"
+_fail_count=$(grep -c "failed QC:" "${_cluster_log}" || true)
+log_info "Clusters passed: ${_pass_count}, failed QC: ${_fail_count}"
 rm -f "${_cluster_log}"
 
 if [[ -f "${autocycler_dir}/clustering/clustering.newick" ]]; then
@@ -392,7 +437,7 @@ PYEOF
 fi
 
 # ==============================================================================
-# CURATION POINT 2 — Inspect clustering
+# 9i. CURATION POINT 2 — Inspect clustering
 # ==============================================================================
 
 cluster_advice="CLUSTER SUMMARY:
@@ -419,18 +464,18 @@ generate_dotplots() {
     # NOTE: cname is inherited from the caller's loop scope (not passed as arg)
     local gfa_untrimmed="${cluster_dir}/1_untrimmed.gfa"
     local gfa_trimmed="${cluster_dir}/2_trimmed.gfa"
-    local gfa_size
+    local gfa_seq_len
 
     if [[ -n "${dry_run:-}" ]]; then
         log_info "  [DRY-RUN] Skipping generate_dotplots for ${cluster_dir}"
         return 0
     fi
 
-    gfa_size=$(wc -c < "${gfa_untrimmed}")
+    gfa_seq_len=$(awk '/^S/{sum+=length($3)} END{print sum+0}' "${gfa_untrimmed}" 2>/dev/null || echo 0)
 
-    if [[ ${gfa_size} -lt 2000000 ]]; then
-        # Plasmid-scale: Autocycler dotplot (purpose-built for trim verification)
-        log_info "  Small cluster — using Autocycler dotplot"
+    # 2 Mbp boundary between plasmid-scale and chromosome-scale clusters
+    if [[ ${gfa_seq_len} -lt 2000000 ]]; then
+        log_info "  Plasmid-scale cluster (${gfa_seq_len} bp) — using Autocycler dotplot"
         run_cmd autocycler dotplot -i "${gfa_untrimmed}" -o "${cluster_dir}/1_untrimmed.png"
         if [[ -s "${gfa_trimmed}" ]]; then
             run_cmd autocycler dotplot -i "${gfa_trimmed}" -o "${cluster_dir}/2_trimmed.png"
@@ -438,8 +483,7 @@ generate_dotplots() {
             log_warn "  ${cname}: 2_trimmed.gfa missing or empty — trim may have excluded all sequences. Skipping trimmed dotplot."
         fi
     elif command -v nucmer &>/dev/null && command -v mummerplot &>/dev/null; then
-        # Chromosome-scale: MUMmer (efficient on multi-Mbp sequences)
-        log_info "  Large cluster — using MUMmer (nucmer + mummerplot)"
+        log_info "  Chromosome-scale cluster (${gfa_seq_len} bp) — using MUMmer (nucmer + mummerplot)"
         for tag in 1_untrimmed 2_trimmed; do
             local gfa="${cluster_dir}/${tag}.gfa"
             if [[ ! -s "${gfa}" ]]; then
@@ -468,6 +512,9 @@ generate_dotplots() {
     fi
 }
 
+# PROKARYONT_RESUME=dnaapler: skip trim & resolve (9j) and assume autocycler_out/
+# already contains valid 5_final.gfa files. This is intended for cases where 03
+# completed through combine (9l) but 04 (dnaapler) needs a clean re-run.
 # --- 9j. Trim & Resolve ---
 if [[ "${_resume_target}" != "dnaapler" ]]; then
 log_step "9j. Trim & resolve"
@@ -599,7 +646,7 @@ touch .success_trim
 fi # End resume skip for trim stage
 
 # ==============================================================================
-# CURATION POINT 3 — Inspect dotplots
+# 9k. CURATION POINT 3 — Inspect dotplots
 # ==============================================================================
 
 dotplot_advice="DOTPLOT FILES:"
@@ -649,7 +696,7 @@ rm -f "${_combine_log}"
 # Consensus file stays inside autocycler_out/ — downstream scripts reference it there
 autocycler_consensus="${autocycler_dir}/consensus_assembly.fasta"
 
-# --- 9o. Metrics ---
+# --- 9m. Metrics ---
 if [[ -f "subsampled_reads/subsample.yaml" ]]; then
     run_cmd cp "subsampled_reads/subsample.yaml" .
 fi
@@ -702,10 +749,10 @@ else
 fi
 
 # ==============================================================================
-# STEP 9p — Read-depth assessment & contig characteristics
+# STEP 9n — Read-depth assessment
 # ==============================================================================
 
-log_step "9p. Read-depth assessment"
+log_step "9n. Read-depth assessment"
 depth_report="$(pwd)/contig_depths.tsv"
 
 if [[ -s "${depth_report}" ]]; then
@@ -771,10 +818,10 @@ else
 fi
 
 # ==============================================================================
-# STEP 9q — Contig depth summary
+# STEP 9o — Contig depth summary
 # ==============================================================================
 
-log_step "9q. Building contig depth summary"
+log_step "9o. Building contig depth summary"
 _cluster_meta="${autocycler_dir}/cluster_metadata.tsv"
 
 if [[ -f "${depth_report}" ]]; then
@@ -782,7 +829,7 @@ if [[ -f "${depth_report}" ]]; then
     while IFS=$'\t' read -r contig length avg_depth rel_depth; do
         [[ "${contig}" == "contig" ]] && continue
         flag=""
-        if awk -v d="${rel_depth}" 'BEGIN{exit (d > 1.5) ? 0 : 1}' 2>/dev/null; then
+        if _float_gt "${rel_depth}" 1.5; then
             flag=" ← elevated copy number"
         fi
         log_info "  ${contig} (${length} bp): ${avg_depth}× avg, ${rel_depth}× relative${flag}"

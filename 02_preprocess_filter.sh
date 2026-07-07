@@ -144,6 +144,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
+_count_reads() {
+    seqkit stats -T "$1" 2>/dev/null | awk -F'\t' 'NR==2{print $4}' || echo "?"
+}
+
 # ==============================================================================
 # STEP 4 — Porechop_ABI Adapter Trimming (optional)
 # ==============================================================================
@@ -156,6 +160,7 @@ if [[ "${enable_porechopabi_trim}" == "true" ]]; then
     _trim_tmp="$(mktemp --suffix=.fastq)"
     run_cmd porechop_abi -abi -i "${_preproc_input}" -o "${_trim_tmp}" --threads "${threads}"
     _preproc_input="${_trim_tmp}"
+    log_info "Post-Porechop_ABI read count: $(_count_reads "${_preproc_input}")"
 
     # ==========================================================================
     # STEP 5 — SNIKT Re-Assessment (post-trim)
@@ -197,6 +202,7 @@ if [[ "${enable_chopper_trim}" == "true" ]]; then
     esac
     [[ "${_preproc_input}" != "${input_fastq}" ]] && rm -f "${_preproc_input}"
     _preproc_input="${_crop_tmp}"
+    log_info "Post-Chopper read count: $(_count_reads "${_preproc_input}")"
 fi
 
 # ==============================================================================
@@ -216,6 +222,7 @@ if [[ "${enable_fastcat_lint}" == "true" ]]; then
     
     [[ "${_preproc_input}" != "${input_fastq}" ]] && rm -f "${_preproc_input}"
     _preproc_input="${_lint_tmp}"
+    log_info "Post-Fastcat_lint read count: $(_count_reads "${_preproc_input}")"
     
     rejected_count=$(grep -c "skipping" "${qc_dir}/02_lint_rejected.log" 2>/dev/null || echo 0)
     log_info "Fastcat lint completed. Rejected ${rejected_count} low-complexity reads (logged to 01_qc/02_lint_rejected.log)."
@@ -283,6 +290,17 @@ run_cmd fastplong -i "${filtered_reads}" \
     --thread "${threads}"
 
 log_info ">>> CHECK: Compare ${qc_dir}/NanoPlot_FiltPol/ to ${qc_dir}/NanoPlot_sample/; review ${qc_dir}/fastplong_report.html"
+
+# --- Read retention report ---
+_filtered_count=$(_count_reads "${filtered_reads}")
+_input_count=$(_count_reads "${input_fastq}")
+if [[ "${_input_count}" != "?" && "${_filtered_count}" != "?" && "${_input_count}" -gt 0 ]]; then
+    _retention=$(awk -v f="${_filtered_count}" -v i="${_input_count}" 'BEGIN{printf "%.1f", (f/i)*100}')
+    log_info "Read retention: ${_filtered_count} / ${_input_count} reads (${_retention}%)"
+    if awk -v r="${_retention}" 'BEGIN{exit (r < 65.0) ? 0 : 1}'; then
+        log_warn "Less than 65% of reads survived filtering. Review --min-qscore and --keep-percent."
+    fi
+fi
 
 # --- Summary -----------------------------------------------------------------
 log_step "Preprocessing & filtering complete."

@@ -1,6 +1,21 @@
 PROKARYONT PIPELINE CHANGELOG
 =============================
 
+Date: 2026-07-07
+Author: Antigravity (AI coding assistant)
+
+Summary of Diagnostics, Tunability, and Numbering Updates
+----------------------------------------------------------
+1. Added read retention report to 02_preprocess_filter.sh, warning users if less than 65% of reads survive filtering.
+2. Implemented per-step read counts logging after Porechop, Chopper, and Fastcat lint steps in 02_preprocess_filter.sh.
+3. Exposed the min_depth_rel relative depth threshold as a tunable parameter in 03_autocycler_assemble.sh (CLI option --min-depth-rel) and pipeline.conf (default: 0.1).
+4. Configured 03_autocycler_assemble.sh to dynamically map <assembler>_extra_args configuration settings from pipeline.conf to individual assembler executions.
+5. Defined a generic, shell-portable _float_gt helper function in 03_autocycler_assemble.sh to standardize floating-point calculations and comparisons.
+6. Added check for SIGKILL (signal 9) in GNU parallel job logs to detect and report out-of-memory (OOM) failures for assembler jobs.
+7. Fixed non-contiguous step numbering gaps in 03_autocycler_assemble.sh by mapping CURATION POINTs to steps 9g, 9i, 9k, resulting in a clean, contiguous 9a–9o step sequence.
+8. Replaced GFA file size approximation check inside generate_dotplots with precise sequence length computed via GFA S-line bp sum.
+9. Added descriptive comment clarifying the PROKARYONT_RESUME=dnaapler logic branch in 03_autocycler_assemble.sh.
+
 Date: 2026-06-27
 Author: Antigravity (AI coding assistant)
 

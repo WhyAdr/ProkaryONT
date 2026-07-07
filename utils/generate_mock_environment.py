@@ -39,8 +39,29 @@ def setup_mock():
     os.makedirs("mock_bin", exist_ok=True)
     for tool in TOOLS:
         path = os.path.join("mock_bin", tool)
-        with open(path, "w", newline="\n") as f:
-            f.write("#!/bin/sh\nexit 0\n")
+        if tool == "seqkit":
+            with open(path, "w", newline="\n") as f:
+                f.write("""#!/bin/sh
+if [ "$1" = "stats" ]; then
+    printf "file\\tformat\\ttype\\tnum_seqs\\tsum_len\\tmin_len\\tavg_len\\tmax_len\\tQ20\\tQ30\\tN50\\tG/C\\n"
+    case "$*" in
+        *filtered_input.fastq.gz*)
+            printf "other.fastq.gz\\tFASTQ\\tDNA\\t50\\t25000\\t200\\t500\\t1000\\t0.0\\t0.0\\t500\\t0.0\\n"
+            ;;
+        *input.fastq.gz*)
+            printf "input.fastq.gz\\tFASTQ\\tDNA\\t100\\t50000\\t200\\t500\\t1000\\t0.0\\t0.0\\t500\\t0.0\\n"
+            ;;
+        *)
+            printf "other.fastq.gz\\tFASTQ\\tDNA\\t50\\t25000\\t200\\t500\\t1000\\t0.0\\t0.0\\t500\\t0.0\\n"
+            ;;
+    esac
+    exit 0
+fi
+exit 0
+""")
+        else:
+            with open(path, "w", newline="\n") as f:
+                f.write("#!/bin/sh\nexit 0\n")
         try:
             st = os.stat(path)
             os.chmod(path, st.st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
