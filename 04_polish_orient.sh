@@ -12,6 +12,7 @@
 #   --dorado-model MODEL    Dorado basecaller model (default: sup)
 #   --min-qscore N          Minimum quality score filter (default: 7)
 #   --cleanup-bam           Remove intermediate BAM files after polishing
+#   --double-polish         Run a second Dorado polish pass after dnaapler reorientation
 #   --skip-curation         Skip interactive prompts (auto-select defaults)
 #   --dry-run               Print commands without executing
 #   --help                  Show this help
@@ -27,6 +28,7 @@ sample_name="${sample_name:-MyBacteria}"
 dorado_model="${dorado_model:-sup}"
 dorado_min_qscore="${dorado_min_qscore:-7}"
 cleanup_bam="${cleanup_bam:-}"
+double_polish="${double_polish:-}"
 skip_curation="${skip_curation:-}"
 config_file="${config_file:-}"
 
@@ -45,6 +47,7 @@ usage() {
     echo "  --dorado-model MODEL        Basecaller model: fast|hac|sup (default: sup)"
     echo "  --min-qscore N              Min quality score for basecalling (default: 7)"
     echo "  --cleanup-bam               Remove intermediate BAM files after polishing"
+    echo "  --double-polish             Second Dorado polish pass after reorientation"
     echo "  --skip-curation             Skip interactive prompts (auto-select defaults)"
     echo "  --dry-run                   Print commands without executing"
     echo "  --help                      Show this help"
@@ -62,6 +65,7 @@ while [[ $# -gt 0 ]]; do
         --dorado-model)  dorado_model="$2"; shift 2 ;;
         --min-qscore)    dorado_min_qscore="$2"; shift 2 ;;
         --cleanup-bam)   cleanup_bam=true; shift ;;
+        --double-polish) double_polish=true; shift ;;
         --skip-curation) skip_curation=true; shift ;;
         --dry-run)       dry_run=true; shift ;;
         --help|-h)       usage ;;
@@ -107,7 +111,7 @@ else
             rm -f all_reads_w_moves.bam
         fi
         run_cmd bash -c 'dorado basecaller "$1" "$2" \
-            --emit-moves --min-qscore "$3" \
+            --emit-moves --trim all --min-qscore "$3" \
             > all_reads_w_moves.bam' \
             _ "${dorado_model}" "${pod5_dir}" "${dorado_min_qscore}"
     fi
@@ -241,7 +245,12 @@ else
     # --- Optional BAM cleanup ---
     if [[ -n "${cleanup_bam}" && -z "${dry_run:-}" ]]; then
         log_info "Cleaning up intermediate BAM files..."
-        run_cmd rm -f all_reads_w_moves.bam aligned.sorted.bam aligned.sorted.bam.bai
+        rm -f aligned.sorted.bam aligned.sorted.bam.bai
+        if [[ -z "${double_polish:-}" ]]; then
+            rm -f all_reads_w_moves.bam
+        else
+            log_info "Retaining all_reads_w_moves.bam for second polish pass after reorientation."
+        fi
     fi
 
 fi # End polishing skip guard
@@ -264,7 +273,9 @@ else
         -i "${polished_assembly}" \
         -o dnaapler_out \
         -p "${sample_name}" \
-        -t "${threads}"
+        -t "${threads}" \
+        -a nearest \
+        --seed_value 13
 fi
 
 run_cmd cp "dnaapler_out/${sample_name}_reoriented.fasta" "${reoriented_assembly}"
@@ -283,6 +294,50 @@ else
 fi
 
 log_info ">>> CHECK: Review dnaapler_out/ for start gene identification."
+
+# ==============================================================================
+# STEP 11b — Second Dorado Polish Pass (optional, after reorientation)
+# ==============================================================================
+
+if [[ -n "${double_polish:-}" ]]; then
+    log_step "Step 11b: Second Dorado polish pass (post-reorientation)"
+
+    if [[ ! -s "all_reads_w_moves.bam" ]]; then
+        log_warn "all_reads_w_moves.bam not found — cannot perform second polish pass."
+        log_warn "Re-run without --cleanup-bam, or omit --double-polish."
+    else
+        log_info "11b-i. Re-aligning reads to reoriented assembly..."
+        run_cmd bash -c 'set -o pipefail; dorado aligner "$1" "$2" --threads "$3" \
+            | samtools sort -@ "$3" -o aligned_reoriented.sorted.bam' \
+            _ "${reoriented_assembly}" all_reads_w_moves.bam "${threads}"
+        run_cmd samtools index -@ "${threads}" aligned_reoriented.sorted.bam
+
+        log_info "11b-ii. Polishing reoriented assembly..."
+        _polish2_tmp="polished_reoriented_tmp.fasta"
+        run_cmd bash -c 'dorado polish "$1" "$2" \
+            --bacteria --threads "$3" "${@:5}" \
+            > "$4"' \
+            _ aligned_reoriented.sorted.bam "${reoriented_assembly}" "${threads}" \
+            "${_polish2_tmp}" "${dorado_rg_flag[@]}"
+
+        # Replace the reoriented assembly with the double-polished version
+        if [[ -z "${dry_run:-}" ]]; then
+            mv "${_polish2_tmp}" "${reoriented_assembly}"
+            log_info "Reoriented assembly updated with second polish pass."
+        fi
+
+        # Clean up second-pass intermediates
+        if [[ -n "${cleanup_bam}" && -z "${dry_run:-}" ]]; then
+            log_info "Cleaning up double-polish intermediate BAM files..."
+            rm -f all_reads_w_moves.bam aligned_reoriented.sorted.bam aligned_reoriented.sorted.bam.bai
+        fi
+    fi
+else
+    # Clean up basecall BAM if double-polish is not requested but cleanup is
+    if [[ -n "${cleanup_bam}" && -z "${dry_run:-}" && -f "all_reads_w_moves.bam" ]]; then
+        rm -f all_reads_w_moves.bam
+    fi
+fi
 
 # --- Summary -----------------------------------------------------------------
 log_step "Polishing & reorientation complete."

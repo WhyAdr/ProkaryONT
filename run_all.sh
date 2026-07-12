@@ -169,6 +169,8 @@ if ! bash "${script_dir}/04_polish_orient.sh" \
     --sample-name "${sample_name}" \
     --dorado-model "${dorado_model:-sup}" \
     --min-qscore "${dorado_min_qscore:-7}" \
+    ${double_polish:+--double-polish} \
+    ${cleanup_bam:+--cleanup-bam} \
     "${common_flags[@]+"${common_flags[@]}"}" \
     "${curation_flags[@]+"${curation_flags[@]}"}"; then
     log_error "04_polish_orient.sh failed. Pipeline aborted."

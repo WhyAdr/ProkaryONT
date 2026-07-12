@@ -1,6 +1,18 @@
 PROKARYONT PIPELINE CHANGELOG
 =============================
 
+Date: 2026-07-12
+Author: Antigravity (AI coding assistant)
+
+Dorado Trim, Double-Polish Pass, & Dnaapler Reproducibility
+------------------------------------------------------------
+1. Added explicit --trim all to dorado basecaller in 04_polish_orient.sh (defensive; already default but future-proofs against changes).
+2. Added opt-in --double-polish flag to 04_polish_orient.sh: runs a second Dorado polish pass after dnaapler reorientation to correct residual errors at the old linearisation breakpoint where reads previously soft-clipped.
+3. Coordinated --cleanup-bam with --double-polish: all_reads_w_moves.bam is retained through Step 11 when double-polish is active, then cleaned up after the second pass.
+4. Added -a nearest (fallback autocomplete for divergent genomes) and --seed_value 13 (reproducible BLAST seed) to the dnaapler all command.
+5. Added double_polish and cleanup_bam config entries to pipeline.conf with explanatory comments.
+6. Updated run_all.sh to forward --double-polish and --cleanup-bam from config to 04_polish_orient.sh.
+
 Date: 2026-07-07
 Author: Antigravity (AI coding assistant)
 
