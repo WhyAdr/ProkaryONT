@@ -12,8 +12,18 @@
 #   --sample-name NAME      Sample name for metrics (default: MyBacteria)
 #   --read-type TYPE        Read type: ont_r9|ont_r10|pacbio_clr|pacbio_hifi (default: ont_r10)
 #   --genome-size SIZE      Override genome size (skip re-estimation)
+#   --assemblers LIST       Comma-separated Autocycler helper tasks to run
 #   --subsample-count N     Number of read subsamples (default: 4)
+#   --subsampler NAME       autocycler|rasusa (default: autocycler)
+#   --subsample-seed N      Base seed for reproducible subsampling (default: 0)
+#   --rasusa-coverage N     Optional Rasusa target coverage per subset
 #   --min-read-depth N      Min subset read depth for subsampling (default: 25)
+#   --combine-reads PATH    Reads used for final combine depth annotation
+#   --combine-depth-kmer N  Combine depth k-mer, odd 11-31 (default: 19)
+#   --combine-threads N     Combine threads, 1-100 (default: min(threads, 100))
+#   --compress-threads N    Compress threads, 1-100 (default: min(threads, 100))
+#   --plassembler-db DIR    Plassembler database used for the PLSDB screen
+#   --skip-plsdb-screen     Skip post-consensus PLSDB characterization
 #   --parallel-jobs N       Concurrent assembler jobs (default: 4)
 #   --canu-parallel-jobs N  Concurrent Canu jobs (default: 2)
 #   --trim-mad N            Autocycler trim MAD outlier threshold (default: 5)
@@ -30,21 +40,30 @@
 source "$(dirname "$0")/00_setup.sh"
 
 # --- Defaults ----------------------------------------------------------------
-threads="${threads:-128}"
-read_type="${read_type:-ont_r10}"
-sample_name="${sample_name:-MyBacteria}"
+threads="${threads:-}"
+read_type="${read_type:-}"
+sample_name="${sample_name:-}"
 genome_size_override="${genome_size_override:-}"
-subsample_count="${subsample_count:-4}"
+subsample_count="${subsample_count:-}"
+subsampler="${subsampler:-}"
+subsample_seed="${subsample_seed:-}"
+rasusa_coverage="${rasusa_coverage:-}"
 min_read_depth="${min_read_depth:-}"
-min_depth_rel="${min_depth_rel:-0.1}"
+min_depth_rel="${min_depth_rel:-}"
 canu_extra_args="${canu_extra_args:-}"
-parallel_jobs="${parallel_jobs:-4}"
-canu_parallel_jobs="${canu_parallel_jobs:-2}"
+parallel_jobs="${parallel_jobs:-}"
+canu_parallel_jobs="${canu_parallel_jobs:-}"
 skip_curation="${skip_curation:-}"
 trim_mad="${trim_mad:-}"
 trim_min_identity="${trim_min_identity:-}"
 config_file="${config_file:-}"
 reads_path="${reads_path:-}"
+autocycler_combine_reads="${autocycler_combine_reads:-}"
+autocycler_combine_depth_kmer="${autocycler_combine_depth_kmer:-}"
+autocycler_combine_threads="${autocycler_combine_threads:-}"
+autocycler_compress_threads="${autocycler_compress_threads:-}"
+plassembler_db="${plassembler_db:-}"
+skip_plsdb_screen="${skip_plsdb_screen:-}"
 
 # Assembler extra args (associative array — set via config file or before sourcing)
 declare -A assembler_args 2>/dev/null || true
@@ -56,12 +75,16 @@ declare -A assembler_args 2>/dev/null || true
 : "${assembler_args[hifiasm]:=}"
 : "${assembler_args[myloasm]:=}"
 : "${assembler_args[nextdenovo]:=}"
-: "${assembler_args[wtdbg2]:=}"
+: "${assembler_args[ilesta]:=}"
+: "${assembler_args[lja]:=}"
+: "${assembler_args[redbean]:=}"
 : "${assembler_args[necat]:=}"
 
-assembler_list="flye, canu, hifiasm, raven, miniasm, metamdbg, myloasm, plassembler, nextdenovo, wtdbg2, necat"
+assembler_list="flye,canu,hifiasm,ilesta,lja,raven,miniasm,metamdbg,myloasm,plassembler,nextdenovo,redbean,necat"
+assemblers_explicit=false
 if [[ -n "${PROKARYONT_ASSEMBLERS:-}" ]]; then
     assembler_list="${PROKARYONT_ASSEMBLERS}"
+    assemblers_explicit=true
 fi
 
 # --- Usage -------------------------------------------------------------------
@@ -75,13 +98,25 @@ usage() {
     echo "  --threads N                 Number of threads (default: 128)"
     echo "  --sample-name NAME          Sample name for metrics (default: MyBacteria)"
     echo "  --genome-size SIZE          Override genome size (skip re-estimation)"
+    echo "  --assemblers LIST           Comma-separated Autocycler helper tasks"
+    echo "                              Canonical: flye,canu,hifiasm,ilesta,lja,raven,miniasm,metamdbg,myloasm,plassembler,nextdenovo,redbean,necat"
+    echo "                              Compatibility alias: wtdbg2 (normalized to redbean)"
     echo "  --subsample-count N         Number of read subsamples (default: 4)"
+    echo "  --subsampler NAME           autocycler|rasusa (default: autocycler)"
+    echo "  --subsample-seed N          Base seed for reproducible subsampling (default: 0)"
+    echo "  --rasusa-coverage FLOAT     Optional Rasusa target coverage per subset"
     echo "  --min-read-depth N          Min subset read depth for subsampling (default: 25)"
     echo "  --min-depth-rel FLOAT       Min relative depth for accepted assemblies (default: 0.1)"
     echo "  --parallel-jobs N           Concurrent assembler jobs (default: 4)"
     echo "  --canu-parallel-jobs N      Concurrent Canu jobs (default: 2)"
     echo "  --trim-mad N                Autocycler trim MAD outlier threshold (default: 5)"
     echo "  --trim-min-identity N       Autocycler trim min alignment identity (default: 0.75)"
+    echo "  --combine-reads PATH        Reads for final combine depth annotation (default: Stage 3 input)"
+    echo "  --combine-depth-kmer N      Combine depth k-mer, odd 11-31 (default: 19)"
+    echo "  --combine-threads N         Combine threads, 1-100 (default: min(global threads, 100))"
+    echo "  --compress-threads N        Compress threads, 1-100 (default: min(global threads, 100))"
+    echo "  --plassembler-db DIR        Plassembler database for the PLSDB screen"
+    echo "  --skip-plsdb-screen         Skip post-consensus PLSDB characterization"
     echo "  --skip-curation             Skip manual curation pauses"
     echo "  --dry-run                   Print commands without executing"
     echo "  --help                      Show this help"
@@ -97,13 +132,23 @@ while [[ $# -gt 0 ]]; do
         --threads)            threads="$2"; shift 2 ;;
         --sample-name)        sample_name="$2"; shift 2 ;;
         --genome-size)        genome_size_override="$2"; shift 2 ;;
+        --assemblers)         assembler_list="$2"; assemblers_explicit=true; shift 2 ;;
         --subsample-count)    subsample_count="$2"; shift 2 ;;
+        --subsampler)         subsampler="$2"; shift 2 ;;
+        --subsample-seed)     subsample_seed="$2"; shift 2 ;;
+        --rasusa-coverage)    rasusa_coverage="$2"; shift 2 ;;
         --min-read-depth)     min_read_depth="$2"; shift 2 ;;
         --min-depth-rel)      min_depth_rel="$2"; shift 2 ;;
         --parallel-jobs)      parallel_jobs="$2"; shift 2 ;;
         --canu-parallel-jobs) canu_parallel_jobs="$2"; shift 2 ;;
         --trim-mad)           trim_mad="$2"; shift 2 ;;
         --trim-min-identity)  trim_min_identity="$2"; shift 2 ;;
+        --combine-reads)      autocycler_combine_reads="$2"; shift 2 ;;
+        --combine-depth-kmer) autocycler_combine_depth_kmer="$2"; shift 2 ;;
+        --combine-threads)    autocycler_combine_threads="$2"; shift 2 ;;
+        --compress-threads)   autocycler_compress_threads="$2"; shift 2 ;;
+        --plassembler-db)     plassembler_db="$2"; shift 2 ;;
+        --skip-plsdb-screen)  skip_plsdb_screen=true; shift ;;
         --skip-curation)      skip_curation=true; shift ;;
         --dry-run)            dry_run=true; shift ;;
         --help|-h)            usage ;;
@@ -114,17 +159,85 @@ done
 # --- Load config (CLI flags parsed above take priority) ----------------------
 [[ -n "${config_file}" ]] && load_config "${config_file}"
 
+if [[ "${assemblers_explicit}" != "true" && -n "${assemblers:-}" ]]; then
+    assembler_list="${assemblers}"
+fi
+threads="${threads:-128}"
+read_type="${read_type:-ont_r10}"
+sample_name="${sample_name:-MyBacteria}"
+subsample_count="${subsample_count:-4}"
+min_depth_rel="${min_depth_rel:-0.1}"
+parallel_jobs="${parallel_jobs:-4}"
+canu_parallel_jobs="${canu_parallel_jobs:-2}"
+
+subsampler="${subsampler:-autocycler}"
+subsample_seed="${subsample_seed:-0}"
+autocycler_combine_depth_kmer="${autocycler_combine_depth_kmer:-19}"
+skip_plsdb_screen="${skip_plsdb_screen:-false}"
+
 # Populate assembler_args from config variables if not already set
-for _asm in flye metamdbg miniasm raven plassembler hifiasm myloasm nextdenovo wtdbg2 necat; do
+for _asm in flye metamdbg miniasm raven plassembler hifiasm myloasm nextdenovo ilesta lja redbean necat; do
     _var="${_asm}_extra_args"
     if [[ -n "${!_var:-}" && -z "${assembler_args[$_asm]:-}" ]]; then
         assembler_args[$_asm]="${!_var}"
     fi
 done
+if [[ -z "${assembler_args[redbean]:-}" && -n "${wtdbg2_extra_args:-}" ]]; then
+    assembler_args[redbean]="${wtdbg2_extra_args}"
+fi
+
+normalize_assembler() {
+    case "$1" in
+        wtdbg2) printf '%s\n' redbean ;;
+        *)      printf '%s\n' "$1" ;;
+    esac
+}
+
+declare -a assemblers=()
+declare -A _seen_assemblers=()
+IFS=',' read -r -a _requested_assemblers <<< "${assembler_list}"
+for _requested in "${_requested_assemblers[@]}"; do
+    _requested="${_requested//[[:space:]]/}"
+    [[ -z "${_requested}" ]] && continue
+    _normalized=$(normalize_assembler "${_requested}")
+    if [[ "${_requested}" == "wtdbg2" ]]; then
+        log_info "Assembler alias normalized: wtdbg2 -> redbean"
+    fi
+    if [[ -z "${_seen_assemblers[${_normalized}]:-}" ]]; then
+        assemblers+=("${_normalized}")
+        _seen_assemblers["${_normalized}"]=1
+    fi
+done
+[[ ${#assemblers[@]} -gt 0 ]] || log_error "No assemblers were selected."
 
 # --- Validate read type early (before any expensive work) --------------------
 if [[ ! "${read_type}" =~ ^(ont_r9|ont_r10|pacbio_clr|pacbio_hifi)$ ]]; then
     log_error "Invalid read type '${read_type}'. Valid: ont_r9, ont_r10, pacbio_clr, pacbio_hifi."
+fi
+for _integer_setting in threads subsample_count parallel_jobs canu_parallel_jobs; do
+    _integer_value="${!_integer_setting}"
+    if [[ ! "${_integer_value}" =~ ^[1-9][0-9]*$ ]]; then
+        log_error "${_integer_setting} must be a positive integer."
+    fi
+done
+if [[ ! "${subsampler}" =~ ^(autocycler|rasusa)$ ]]; then
+    log_error "Invalid subsampler '${subsampler}'. Valid: autocycler, rasusa."
+fi
+if [[ ! "${subsample_seed}" =~ ^[0-9]+$ ]]; then
+    log_error "--subsample-seed must be a non-negative integer."
+fi
+if [[ -n "${rasusa_coverage}" ]] && { [[ ! "${rasusa_coverage}" =~ ^[0-9]+([.][0-9]+)?$ ]] || ! awk -v v="${rasusa_coverage}" 'BEGIN { exit (v > 0) ? 0 : 1 }'; }; then
+    log_error "--rasusa-coverage must be a positive number."
+fi
+if [[ ! "${autocycler_combine_depth_kmer}" =~ ^[0-9]+$ ]] ||
+   (( autocycler_combine_depth_kmer < 11 || autocycler_combine_depth_kmer > 31 || autocycler_combine_depth_kmer % 2 == 0 )); then
+    log_error "--combine-depth-kmer must be an odd integer from 11 to 31."
+fi
+if [[ -n "${autocycler_combine_threads}" ]] && { [[ ! "${autocycler_combine_threads}" =~ ^[0-9]+$ ]] || (( autocycler_combine_threads < 1 || autocycler_combine_threads > 100 )); }; then
+    log_error "--combine-threads must be an integer from 1 to 100."
+fi
+if [[ -n "${autocycler_compress_threads}" ]] && { [[ ! "${autocycler_compress_threads}" =~ ^[0-9]+$ ]] || (( autocycler_compress_threads < 1 || autocycler_compress_threads > 100 )); }; then
+    log_error "--compress-threads must be an integer from 1 to 100."
 fi
 
 # Set GZIP_BIN now that threads are parsed
@@ -132,11 +245,50 @@ export GZIP_BIN="$(get_gzip_cmd)"
 # --- Validate ----------------------------------------------------------------
 require_tool autocycler
 require_tool parallel
+require_tool seqkit
+require_tool minimap2
+require_tool samtools
 
-for tool in canu flye metaMDBG miniasm minipolish minimap2 raven \
-            plassembler hifiasm myloasm nextdenovo wtdbg2 necat samtools \
-            nucmer mummerplot; do
-    command -v "${tool}" &>/dev/null || log_warn "'${tool}' not found — its jobs will fail."
+[[ "${subsampler}" == "rasusa" ]] && require_tool rasusa
+if [[ "${subsampler}" == "rasusa" ]] && ! rasusa reads --help &>/dev/null; then
+    log_error "Installed Rasusa does not expose the modern 'rasusa reads' command. Update Rasusa or use --subsampler autocycler."
+fi
+
+for assembler in "${assemblers[@]}"; do
+    if ! autocycler helper "${assembler}" --help &>/dev/null; then
+        log_error "Installed Autocycler does not expose helper task '${assembler}'. Update Autocycler or remove ${assembler} from the assembler list."
+    fi
+done
+
+declare -a selected_assembler_tools=()
+for assembler in "${assemblers[@]}"; do
+    case "${assembler}" in
+        metamdbg) selected_assembler_tools+=(metaMDBG) ;;
+        redbean)  selected_assembler_tools+=(wtdbg2) ;;
+        ilesta)   selected_assembler_tools+=(Ilesta minipolish minimap2 racon) ;;
+        lja)      selected_assembler_tools+=(lja) ;;
+        miniasm)  selected_assembler_tools+=(miniasm minipolish minimap2 racon) ;;
+        *)        selected_assembler_tools+=("${assembler}") ;;
+    esac
+done
+for tool in "${selected_assembler_tools[@]}"; do
+    command -v "${tool}" &>/dev/null || log_warn "'${tool}' not found; selected assembler jobs may fail."
+done
+
+if [[ "${skip_plsdb_screen}" != "true" ]]; then
+    require_tool plassembler
+    if [[ -z "${plassembler_db}" && -n "${PLASSEMBLER_DB:-}" && -d "${PLASSEMBLER_DB}" ]]; then
+        plassembler_db="${PLASSEMBLER_DB}"
+    elif [[ -z "${plassembler_db}" && -n "${CONDA_PREFIX:-}" && -d "${CONDA_PREFIX}/plassembler_db" ]]; then
+        plassembler_db="${CONDA_PREFIX}/plassembler_db"
+    fi
+    if [[ -z "${plassembler_db}" || ! -d "${plassembler_db}" ]]; then
+        log_error "PLSDB screening is enabled, but no Plassembler database was found. Set --plassembler-db, plassembler_db, or PLASSEMBLER_DB; or use --skip-plsdb-screen."
+    fi
+fi
+
+for tool in nucmer mummerplot; do
+    command -v "${tool}" &>/dev/null || log_warn "'${tool}' not found; chromosome-scale dotplots will be skipped."
 done
 
 # --- Derived values ----------------------------------------------------------
@@ -148,6 +300,7 @@ assemblies_dir="$(pwd)/assemblies"
 autocycler_dir="$(pwd)/autocycler_out"
 filtered_reads="$(pwd)/filtered_input.fastq.gz"
 input_reads="${reads_path:-${filtered_reads}}"
+combine_reads="${autocycler_combine_reads:-${input_reads}}"
 autocycler_consensus="${autocycler_dir}/consensus_assembly.fasta"
 
 if [[ -n "${reads_path:-}" ]]; then
@@ -155,10 +308,44 @@ if [[ -n "${reads_path:-}" ]]; then
 else
     require_file "${input_reads}" "02_preprocess_filter.sh"
 fi
+require_file "${combine_reads}" "Provide --combine-reads PATH or a valid Stage 3 input FASTQ"
+
+if [[ -n "${autocycler_combine_threads}" ]]; then
+    combine_threads="${autocycler_combine_threads}"
+else
+    combine_threads="${threads}"
+    if (( combine_threads > 100 )); then
+        combine_threads=100
+        log_info "Autocycler combine supports at most 100 threads; using 100 of requested ${threads}."
+    fi
+fi
+
+if [[ -n "${autocycler_compress_threads}" ]]; then
+    compress_threads="${autocycler_compress_threads}"
+else
+    compress_threads="${threads}"
+    if (( compress_threads > 100 )); then
+        compress_threads=100
+        log_info "Autocycler compress supports at most 100 threads; using 100 of requested ${threads}."
+    fi
+fi
 
 # --- Utility: portable float comparison (replaces bc -l dependency) ----------
 _float_gt() {
     awk -v v1="$1" -v v2="$2" 'BEGIN{exit (v1+0 > v2+0) ? 0 : 1}' 2>/dev/null
+}
+
+_normalize_genome_size_bp() {
+    local value="${1,,}"
+    local multiplier=1
+    case "${value}" in
+        *k) multiplier=1000; value="${value%?}" ;;
+        *m) multiplier=1000000; value="${value%?}" ;;
+        *g) multiplier=1000000000; value="${value%?}" ;;
+    esac
+    [[ "${value}" =~ ^[0-9]+([.][0-9]+)?$ ]] || return 1
+    awk -v value="${value}" -v multiplier="${multiplier}" \
+        'BEGIN { printf "%.0f\n", value * multiplier }'
 }
 
 # ==============================================================================
@@ -197,11 +384,13 @@ if [[ -f "${genome_size_dir}/lrge_output.txt" ]]; then
     log_info "LRGE estimate: $(cat "${genome_size_dir}/lrge_output.txt")"
 fi
 
-# Pre-flight: warn if available bases seem insufficient for subsampling
-if [[ -z "${dry_run:-}" && "${genome_size}" =~ ^[0-9]+$ ]]; then
-    _avail_bases=$(seqkit stats -T "${input_reads}" 2>/dev/null \
-        | awk -F'\t' 'NR==2{print $5}' || echo 0)
-    _min_required=$(awk -v gs="${genome_size}" -v sc="${subsample_count}" \
+# Pre-flight: measure available depth for the selected subsampling strategy.
+_genome_size_bp=$(_normalize_genome_size_bp "${genome_size}" 2>/dev/null || echo 0)
+_avail_bases=$(seqkit stats -T "${input_reads}" 2>/dev/null \
+    | awk -F'\t' 'NR==2{print $5}' || echo 0)
+_avail_bases="${_avail_bases:-0}"
+if [[ "${subsampler}" == "autocycler" && "${_genome_size_bp}" =~ ^[1-9][0-9]*$ ]]; then
+    _min_required=$(awk -v gs="${_genome_size_bp}" -v sc="${subsample_count}" \
         -v md="${min_read_depth:-25}" 'BEGIN{printf "%.0f", gs * sc * md}')
     if awk -v av="${_avail_bases}" -v req="${_min_required}" \
         'BEGIN{exit (av+0 < req+0) ? 0 : 1}' 2>/dev/null; then
@@ -210,15 +399,79 @@ if [[ -z "${dry_run:-}" && "${genome_size}" =~ ^[0-9]+$ ]]; then
 fi
 
 # --- 9b. Subsample reads ---
-log_info "9b. Subsampling reads (count=${subsample_count})...."
-subsample_flags=(
-    --reads "${input_reads}"
-    --out_dir subsampled_reads
-    --genome_size "${genome_size}"
-    --count "${subsample_count}"
-)
-[[ -n "${min_read_depth}" ]] && subsample_flags+=(--min_read_depth "${min_read_depth}")
-run_cmd autocycler subsample "${subsample_flags[@]}"
+log_info "9b. Subsampling reads (method=${subsampler}, count=${subsample_count})..."
+if [[ "${subsampler}" == "autocycler" ]]; then
+    subsample_flags=(
+        --reads "${input_reads}"
+        --out_dir subsampled_reads
+        --genome_size "${genome_size}"
+        --count "${subsample_count}"
+        --seed "${subsample_seed}"
+    )
+    [[ -n "${min_read_depth}" ]] && subsample_flags+=(--min_read_depth "${min_read_depth}")
+    run_cmd autocycler subsample "${subsample_flags[@]}"
+else
+    if [[ ! "${_genome_size_bp}" =~ ^[1-9][0-9]*$ || ! "${_avail_bases}" =~ ^[0-9]+$ || "${_avail_bases}" -eq 0 ]]; then
+        log_error "Rasusa subsampling requires a numeric genome size and readable input base count."
+    fi
+    _total_depth=$(awk -v bases="${_avail_bases}" -v genome="${_genome_size_bp}" \
+        'BEGIN { printf "%.3f", bases / genome }')
+    if [[ -n "${rasusa_coverage}" ]]; then
+        _rasusa_target="${rasusa_coverage}"
+    else
+        _rasusa_target=$(awk -v depth="${_total_depth}" -v minimum="${min_read_depth:-25}" \
+            'BEGIN {
+                ratio = 4 * depth / minimum
+                if (ratio <= 1) exit 1
+                printf "%.1f", minimum * (log(ratio) / log(2)) / 2
+            }') || log_error "Input depth (${_total_depth}x) is too low to auto-calculate a positive Rasusa subset target. Set --rasusa-coverage explicitly or use native Autocycler subsampling."
+    fi
+
+    log_info "Subsampler: Rasusa"
+    log_info "Input depth: ${_total_depth}x"
+    log_info "Rasusa subset target: ${_rasusa_target}x"
+    log_info "Subsets: ${subsample_count}"
+    log_info "Base seed: ${subsample_seed}"
+    if _float_gt "${_rasusa_target}" "${_total_depth}"; then
+        log_warn "Rasusa target coverage (${_rasusa_target}x) exceeds input depth (${_total_depth}x); --strict will reject the run. Lower --rasusa-coverage."
+    fi
+    _sampling_fraction=$(awk -v target="${_rasusa_target}" -v total="${_total_depth}" \
+        'BEGIN { if (total > 0) printf "%.3f", target / total; else print 0 }')
+    if _float_gt "${_sampling_fraction}" 0.5; then
+        log_warn "Rasusa subsets will be highly overlapping at the requested coverage. Native 'autocycler subsample' is preferable when maximal subset independence is important."
+    fi
+
+    mkdir -p subsampled_reads
+    for ((i = 1; i <= subsample_count; i++)); do
+        printf -v _sample_index '%02d' "${i}"
+        _sample_seed=$(( subsample_seed + i - 1 ))
+        run_cmd rasusa reads \
+            --coverage "${_rasusa_target}" \
+            --genome-size "${genome_size}" \
+            --seed "${_sample_seed}" \
+            --strict \
+            --output "subsampled_reads/sample_${_sample_index}.fastq" \
+            "${input_reads}"
+    done
+
+    if [[ -z "${dry_run:-}" ]]; then
+        _rasusa_metadata="subsampled_reads/rasusa_subsample.tsv"
+        printf 'sample\tmethod\tseed\ttarget_coverage\tread_count\tbases\tobserved_coverage\tn50\n' > "${_rasusa_metadata}"
+        for ((i = 1; i <= subsample_count; i++)); do
+            printf -v _sample_index '%02d' "${i}"
+            _sample_seed=$(( subsample_seed + i - 1 ))
+            _sample_file="subsampled_reads/sample_${_sample_index}.fastq"
+            read -r _sample_count _sample_bases _sample_n50 <<< "$(seqkit stats -a -T "${_sample_file}" 2>/dev/null | awk -F'\t' 'NR==1{for(i=1;i<=NF;i++){if($i=="num_seqs")c=i;if($i=="sum_len")b=i;if($i=="N50")n=i}} NR==2{print $c, $b, $n}')"
+            _observed_coverage=$(awk -v bases="${_sample_bases:-0}" -v genome="${_genome_size_bp}" 'BEGIN { printf "%.2f", bases / genome }')
+            printf 'sample_%s\trasusa\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+                "${_sample_index}" "${_sample_seed}" "${_rasusa_target}" \
+                "${_sample_count:-0}" "${_sample_bases:-0}" "${_observed_coverage}" "${_sample_n50:-0}" \
+                >> "${_rasusa_metadata}"
+        done
+    else
+        log_info "[DRY-RUN] Would write subsampled_reads/rasusa_subsample.tsv from seqkit stats."
+    fi
+fi
 
 # --- 9c. Build job lists ---
 if [[ -f "${assemblies_dir}/joblog.tsv" || -f "${assemblies_dir}/joblog_canu.tsv" ]]; then
@@ -231,7 +484,12 @@ else
     # --min_depth_rel: accept assemblies from subsamples with >= this fraction
     # of target depth. Default 0.1 (10%). Lower values tolerate sparser
     # subsamples but may produce fragmented assemblies.
-    for assembler in $(echo "${assembler_list}" | tr ',' '\n' | tr -d ' ' | grep -v 'canu' | sort); do
+    _canu_selected=false
+    for assembler in "${assemblers[@]}"; do
+        if [[ "${assembler}" == "canu" ]]; then
+            _canu_selected=true
+            continue
+        fi
         extra="${assembler_args[$assembler]:-}"
         for i in $(seq -f "%02g" 1 "${subsample_count}"); do
             cmd="autocycler helper ${assembler} --reads subsampled_reads/sample_${i}.fastq --out_prefix ${assemblies_dir}/${assembler}_${i} --threads ${threads_per_job} --genome_size ${genome_size} --read_type ${read_type} --min_depth_rel ${min_depth_rel}"
@@ -240,11 +498,13 @@ else
         done
     done
 
-    for i in $(seq -f "%02g" 1 "${subsample_count}"); do
-        cmd="autocycler helper canu --reads subsampled_reads/sample_${i}.fastq --out_prefix ${assemblies_dir}/canu_${i} --threads ${canu_threads_per_job} --genome_size ${genome_size} --read_type ${read_type} --min_depth_rel ${min_depth_rel}"
-        [[ -n "${canu_extra_args}" ]] && cmd+=" -- ${canu_extra_args}"
-        echo "${cmd}" >> "${assemblies_dir}/jobs_canu.txt"
-    done
+    if [[ "${_canu_selected}" == "true" ]]; then
+        for i in $(seq -f "%02g" 1 "${subsample_count}"); do
+            cmd="autocycler helper canu --reads subsampled_reads/sample_${i}.fastq --out_prefix ${assemblies_dir}/canu_${i} --threads ${canu_threads_per_job} --genome_size ${genome_size} --read_type ${read_type} --min_depth_rel ${min_depth_rel}"
+            [[ -n "${canu_extra_args}" ]] && cmd+=" -- ${canu_extra_args}"
+            echo "${cmd}" >> "${assemblies_dir}/jobs_canu.txt"
+        done
+    fi
 
     log_info "Jobs: $(wc -l < "${assemblies_dir}/jobs.txt" 2>/dev/null || echo 0) general, $(wc -l < "${assemblies_dir}/jobs_canu.txt" 2>/dev/null || echo 0) Canu"
 fi # End joblog guard
@@ -375,7 +635,7 @@ if [[ "${_resume_target}" != "trim" && "${_resume_target}" != "dnaapler" ]]; the
 
 # --- 9h. Compress & Cluster ---
 log_step "9h. Compress & cluster"
-run_cmd autocycler compress -i "${assemblies_dir}" -a "${autocycler_dir}"
+run_cmd autocycler compress -i "${assemblies_dir}" -a "${autocycler_dir}" --threads "${compress_threads}"
 
 _cluster_log="${autocycler_dir}/cluster_capture.log"
 if [[ -z "${dry_run:-}" ]]; then
@@ -680,10 +940,18 @@ if [[ ${#_gfas[@]} -eq 0 ]]; then
     fi
 fi
 
+combine_cmd=(
+    autocycler combine
+    -a "${autocycler_dir}"
+    -i "${_gfas[@]}"
+    --reads "${combine_reads}"
+    --depth_kmer "${autocycler_combine_depth_kmer}"
+    --threads "${combine_threads}"
+)
 if [[ -z "${dry_run:-}" ]]; then
-    autocycler combine -a "${autocycler_dir}" -i "${_gfas[@]}" 2>&1 | tee "${_combine_log}"
+    "${combine_cmd[@]}" 2>&1 | tee "${_combine_log}"
 else
-    log_info "[DRY-RUN] autocycler combine -a ${autocycler_dir} ..."
+    run_cmd "${combine_cmd[@]}"
     touch "${_combine_log}"
 fi
 
@@ -696,9 +964,64 @@ rm -f "${_combine_log}"
 # Consensus file stays inside autocycler_out/ — downstream scripts reference it there
 autocycler_consensus="${autocycler_dir}/consensus_assembly.fasta"
 
-# --- 9m. Metrics ---
+if [[ -z "${dry_run:-}" && ! -s "${autocycler_consensus}" ]]; then
+    log_error "Autocycler combine did not produce a non-empty ${autocycler_consensus}."
+fi
+
+# --- 9m. Characterize every consensus contig against PLSDB ---
+if [[ "${skip_plsdb_screen}" == "true" ]]; then
+    log_info "9m. PLSDB screen skipped by configuration."
+    if [[ -f "$(pwd)/plassembler_summary.tsv" ]]; then
+        log_warn "An existing plassembler_summary.tsv was not refreshed because the PLSDB screen was skipped."
+    fi
+else
+    log_step "9m. Screening consensus contigs against PLSDB with Plassembler assembled"
+    plassembler_plsdb_dir="${autocycler_dir}/plassembler_plsdb"
+    plassembler_summary_source="${plassembler_plsdb_dir}/plassembler_summary.tsv"
+    plassembler_summary="$(pwd)/plassembler_summary.tsv"
+    plassembler_cmd=(
+        plassembler assembled
+        --no_copy_numbers
+        --database "${plassembler_db}"
+        --input_plasmids "${autocycler_consensus}"
+        --outdir "${plassembler_plsdb_dir}"
+        --prefix plassembler
+        --threads "${threads}"
+        --force
+    )
+
+    if [[ -n "${dry_run:-}" ]]; then
+        run_cmd "${plassembler_cmd[@]}"
+        log_info "[DRY-RUN] Would validate one PLSDB summary row per consensus contig and publish ${plassembler_summary}."
+    else
+        _consensus_checksum_before=$(cksum "${autocycler_consensus}" | awk '{print $1 ":" $2}')
+        "${plassembler_cmd[@]}"
+        [[ -s "${plassembler_summary_source}" ]] || log_error "Plassembler completed without a non-empty ${plassembler_summary_source}."
+
+        _consensus_contigs=$(grep -c '^>' "${autocycler_consensus}" || true)
+        if [[ "${_consensus_contigs}" -lt 1 ]]; then
+            log_error "The Autocycler consensus contains no FASTA records."
+        fi
+        _summary_rows=$(awk 'NR > 1 && $0 !~ /^[[:space:]]*$/ { rows++ } END { print rows + 0 }' "${plassembler_summary_source}")
+        if [[ "${_summary_rows}" -ne "${_consensus_contigs}" ]]; then
+            log_error "Incomplete PLSDB summary: ${_summary_rows} data rows for ${_consensus_contigs} consensus contigs."
+        fi
+
+        _consensus_checksum_after=$(cksum "${autocycler_consensus}" | awk '{print $1 ":" $2}')
+        if [[ "${_consensus_checksum_before}" != "${_consensus_checksum_after}" ]]; then
+            log_error "The authoritative Autocycler consensus changed during the PLSDB screen; refusing to publish the summary."
+        fi
+        cp "${plassembler_summary_source}" "${plassembler_summary}"
+        log_info "PLSDB summary: ${plassembler_summary} (${_summary_rows} contigs)"
+    fi
+fi
+
+# --- 9n. Metrics ---
 if [[ -f "subsampled_reads/subsample.yaml" ]]; then
     run_cmd cp "subsampled_reads/subsample.yaml" .
+fi
+if [[ -f "subsampled_reads/rasusa_subsample.tsv" ]]; then
+    run_cmd cp "subsampled_reads/rasusa_subsample.tsv" .
 fi
 
 # Extract initial read stats (needs -a for N50 column)
@@ -749,10 +1072,10 @@ else
 fi
 
 # ==============================================================================
-# STEP 9n — Read-depth assessment
+# STEP 9o — Read-depth assessment
 # ==============================================================================
 
-log_step "9n. Read-depth assessment"
+log_step "9o. Read-depth assessment"
 depth_report="$(pwd)/contig_depths.tsv"
 
 if [[ -s "${depth_report}" ]]; then
@@ -818,10 +1141,10 @@ else
 fi
 
 # ==============================================================================
-# STEP 9o — Contig depth summary
+# STEP 9p — Contig depth summary
 # ==============================================================================
 
-log_step "9o. Building contig depth summary"
+log_step "9p. Building contig depth summary"
 _cluster_meta="${autocycler_dir}/cluster_metadata.tsv"
 
 if [[ -f "${depth_report}" ]]; then
@@ -838,6 +1161,9 @@ fi
 
 log_step "Assembly complete."
 log_info "Consensus: ${autocycler_consensus}"
+if [[ "${skip_plsdb_screen}" != "true" ]]; then
+    log_info "PLSDB:    $(pwd)/plassembler_summary.tsv"
+fi
 log_info "Metrics:   metrics.tsv"
 log_info "Depths:    ${depth_report}"
 log_info "Cluster metadata: ${_cluster_meta}"
@@ -848,4 +1174,3 @@ log_info "Cluster metadata: ${_cluster_meta}"
 if [[ -n "${PROKARYONT_RAGTAG:-}" ]]; then
     log_warn "RagTag scaffolding has moved out of 03_autocycler_assemble.sh pending a dedicated post-assembly script (not yet implemented). --ragtag is currently a no-op here."
 fi
-

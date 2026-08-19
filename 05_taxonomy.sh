@@ -16,10 +16,10 @@
 source "$(dirname "$0")/00_setup.sh"
 
 # --- Defaults ----------------------------------------------------------------
-threads="${threads:-128}"
+threads="${threads:-}"
 assembly="${assembly:-}"
 gtdbtk_data_path="${gtdbtk_data_path:-}"
-barrnap_kingdom="${barrnap_kingdom:-bac}"
+barrnap_kingdom="${barrnap_kingdom:-}"
 config_file="${config_file:-}"
 
 # --- Usage -------------------------------------------------------------------
@@ -55,6 +55,9 @@ done
 
 # --- Load config (CLI flags parsed above take priority) ----------------------
 [[ -n "${config_file}" ]] && load_config "${config_file}"
+
+threads="${threads:-128}"
+barrnap_kingdom="${barrnap_kingdom:-bac}"
 
 # --- Validate ----------------------------------------------------------------
 require_arg "--assembly" "${assembly}"
@@ -96,7 +99,7 @@ if [[ -z "${dry_run:-}" ]] && ls "${taxonomy_dir}"/gtdbtk.*.summary.tsv 1> /dev/
     fi
 fi
 
-log_info "    Update genus/species/gram in pipeline.conf before running 06_annotate_assess.sh."
+log_info "    Record the reviewed classification for any downstream analysis you run outside the active pipeline."
 
 # ==============================================================================
 # STEP 12b — MLST Typing
@@ -151,4 +154,4 @@ log_info "GTDB-Tk:   ${taxonomy_dir}/"
 log_info "MLST:      ${taxonomy_dir}/mlst_result.tsv"
 log_info "16S rRNA:  ${taxonomy_dir}/16S_only.fasta"
 log_info ""
-log_info ">>> NEXT: Review results, update genus/species/gram in config, then run 06_annotate_assess.sh"
+log_info ">>> NEXT: Review and archive the taxonomy, MLST, and 16S evidence for this assembly."

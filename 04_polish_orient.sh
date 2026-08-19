@@ -11,6 +11,7 @@
 #   --sample-name NAME      Sample name for dnaapler prefix (default: MyBacteria)
 #   --dorado-model MODEL    Dorado basecaller model (default: sup)
 #   --min-qscore N          Minimum quality score filter (default: 7)
+#   --device DEVICE         Dorado polish device (e.g. cuda:0, cuda:all, cpu)
 #   --cleanup-bam           Remove intermediate BAM files after polishing
 #   --double-polish         Run a second Dorado polish pass after dnaapler reorientation
 #   --skip-curation         Skip interactive prompts (auto-select defaults)
@@ -21,12 +22,13 @@
 source "$(dirname "$0")/00_setup.sh"
 
 # --- Defaults ----------------------------------------------------------------
-threads="${threads:-128}"
+threads="${threads:-}"
 assembly="${assembly:-}"
 pod5_dir="${pod5_dir:-}"
-sample_name="${sample_name:-MyBacteria}"
-dorado_model="${dorado_model:-sup}"
-dorado_min_qscore="${dorado_min_qscore:-7}"
+sample_name="${sample_name:-}"
+dorado_model="${dorado_model:-}"
+dorado_min_qscore="${dorado_min_qscore:-}"
+dorado_polish_device="${dorado_polish_device:-}"
 cleanup_bam="${cleanup_bam:-}"
 double_polish="${double_polish:-}"
 skip_curation="${skip_curation:-}"
@@ -46,6 +48,7 @@ usage() {
     echo "  --sample-name NAME          Sample name for dnaapler prefix (default: MyBacteria)"
     echo "  --dorado-model MODEL        Basecaller model: fast|hac|sup (default: sup)"
     echo "  --min-qscore N              Min quality score for basecalling (default: 7)"
+    echo "  --device DEVICE             Dorado polish device (e.g. cuda:0, cuda:0,1, cuda:all, cpu)"
     echo "  --cleanup-bam               Remove intermediate BAM files after polishing"
     echo "  --double-polish             Second Dorado polish pass after reorientation"
     echo "  --skip-curation             Skip interactive prompts (auto-select defaults)"
@@ -64,6 +67,7 @@ while [[ $# -gt 0 ]]; do
         --sample-name)   sample_name="$2"; shift 2 ;;
         --dorado-model)  dorado_model="$2"; shift 2 ;;
         --min-qscore)    dorado_min_qscore="$2"; shift 2 ;;
+        --device)        dorado_polish_device="$2"; shift 2 ;;
         --cleanup-bam)   cleanup_bam=true; shift ;;
         --double-polish) double_polish=true; shift ;;
         --skip-curation) skip_curation=true; shift ;;
@@ -75,6 +79,11 @@ done
 
 # --- Load config (CLI flags parsed above take priority) ----------------------
 [[ -n "${config_file}" ]] && load_config "${config_file}"
+
+threads="${threads:-128}"
+sample_name="${sample_name:-MyBacteria}"
+dorado_model="${dorado_model:-sup}"
+dorado_min_qscore="${dorado_min_qscore:-7}"
 
 # Set GZIP_BIN now that threads are parsed
 export GZIP_BIN="$(get_gzip_cmd)"
@@ -92,6 +101,11 @@ require_tool dnaapler
 # --- Derived paths -----------------------------------------------------------
 polished_assembly="$(pwd)/polished_assembly.fasta"
 reoriented_assembly="$(pwd)/dnaapler_reoriented.fasta"
+dorado_rg_flag=()
+dorado_device_flag=()
+if [[ -n "${dorado_polish_device}" ]]; then
+    dorado_device_flag=(--device "${dorado_polish_device}")
+fi
 
 # ==============================================================================
 # STEP 10 — Dorado Polishing
@@ -238,7 +252,8 @@ else
     run_cmd bash -c 'dorado polish "$1" "$2" \
         --bacteria --threads "$3" "${@:5}" \
         > "$4"' \
-        _ aligned.sorted.bam "${assembly}" "${threads}" "${polished_assembly}" "${dorado_rg_flag[@]}"
+        _ aligned.sorted.bam "${assembly}" "${threads}" "${polished_assembly}" \
+        "${dorado_device_flag[@]}" "${dorado_rg_flag[@]}"
 
     log_info ">>> CHECK: Compare ${polished_assembly} to ${assembly}"
 
@@ -302,7 +317,7 @@ log_info ">>> CHECK: Review dnaapler_out/ for start gene identification."
 if [[ -n "${double_polish:-}" ]]; then
     log_step "Step 11b: Second Dorado polish pass (post-reorientation)"
 
-    if [[ ! -s "all_reads_w_moves.bam" ]]; then
+    if [[ -z "${dry_run:-}" && ! -s "all_reads_w_moves.bam" ]]; then
         log_warn "all_reads_w_moves.bam not found — cannot perform second polish pass."
         log_warn "Re-run without --cleanup-bam, or omit --double-polish."
     else
@@ -318,7 +333,7 @@ if [[ -n "${double_polish:-}" ]]; then
             --bacteria --threads "$3" "${@:5}" \
             > "$4"' \
             _ aligned_reoriented.sorted.bam "${reoriented_assembly}" "${threads}" \
-            "${_polish2_tmp}" "${dorado_rg_flag[@]}"
+            "${_polish2_tmp}" "${dorado_device_flag[@]}" "${dorado_rg_flag[@]}"
 
         # Replace the reoriented assembly with the double-polished version
         if [[ -z "${dry_run:-}" ]]; then

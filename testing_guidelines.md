@@ -15,27 +15,44 @@ python utils/generate_mock_environment.py
 ```
 This command:
 *   Creates a `mock_bin/` folder populated with fake scripts for all pipeline dependencies.
-*   Creates directories like `pod5_dir/` and `autocycler_out/`.
+*   Creates directories like `pod5_dir/`, `autocycler_out/`, and `plassembler_db/`.
 *   Generates a valid dummy FASTQ structure in `input.fastq.gz` and `filtered_input.fastq.gz`.
 *   Touches intermediate files (such as `consensus_assembly.fasta` and `polished_assembly.fasta`) required by the sequential script validation checks (`require_file`).
 
-### 2. Run Pipeline Dry-Run tests
-To run the dry-run verification, add the `mock_bin/` folder to your path and execute the orchestration scripts in dry-run mode:
+### 2. Run modular dry-run tests
+Add the `mock_bin/` folder and mock Plassembler database to your environment,
+then invoke each active script separately. There is no active master
+orchestrator.
 
 #### On Linux / macOS / Git Bash:
 ```bash
 # Add mock bin folder to Path
 export PATH="$(pwd)/mock_bin:$PATH"
+export PLASSEMBLER_DB="$(pwd)/plassembler_db"
 
-# Run the complete orchestrator
-bash run_all.sh --config pipeline.conf --dry-run --skip-curation
-```
-
-#### Running Standalone Steps:
-You can also run specific scripts independently:
-```bash
-# Verify Autocycler assembly alone on a custom read path
-bash 03_autocycler_assemble.sh --reads input.fastq.gz --dry-run --skip-curation
+# Examples: validate the changed active-stage command contracts
+rm -f filtered_input.fastq.gz
+bash 02_preprocess_filter.sh --input-fastq input.fastq.gz --dry-run > no_keep.log 2>&1
+! grep -q -- '--keep_percent' no_keep.log
+bash 02_preprocess_filter.sh --input-fastq input.fastq.gz --keep-percent 90 --dry-run > keep90.log 2>&1
+grep -q -- '--keep_percent 90' keep90.log
+bash 03_autocycler_assemble.sh \
+  --reads input.fastq.gz \
+  --read-type ont_r10 \
+  --genome-size 5000000 \
+  --assemblers lja,ilesta \
+  --subsample-count 2 \
+  --compress-threads 100 \
+  --combine-threads 100 \
+  --skip-curation \
+  --dry-run
+bash 04_polish_orient.sh \
+  --assembly autocycler_out/consensus_assembly.fasta \
+  --pod5-dir pod5_dir/ \
+  --device cuda:1 \
+  --double-polish \
+  --skip-curation \
+  --dry-run
 ```
 
 ### 3. Clean up the Environment

@@ -19,6 +19,7 @@ TOOLS = [
     "parallel", "dorado", "samtools", "dnaapler", "necat",
     "canu", "flye", "metaMDBG", "miniasm", "minipolish", "minimap2",
     "plassembler", "hifiasm", "myloasm", "nextdenovo", "wtdbg2",
+    "rasusa", "lja", "Ilesta", "racon",
     "nucmer", "mummerplot"
 ]
 
@@ -29,7 +30,8 @@ FILES = [
 
 DIRS = [
     "pod5_dir",
-    "autocycler_out"
+    "autocycler_out",
+    "plassembler_db",
 ]
 
 def setup_mock():
@@ -46,13 +48,13 @@ if [ "$1" = "stats" ]; then
     printf "file\\tformat\\ttype\\tnum_seqs\\tsum_len\\tmin_len\\tavg_len\\tmax_len\\tQ20\\tQ30\\tN50\\tG/C\\n"
     case "$*" in
         *filtered_input.fastq.gz*)
-            printf "other.fastq.gz\\tFASTQ\\tDNA\\t50\\t25000\\t200\\t500\\t1000\\t0.0\\t0.0\\t500\\t0.0\\n"
+            printf "other.fastq.gz\\tFASTQ\\tDNA\\t50\\t800000000\\t200\\t500\\t1000\\t0.0\\t0.0\\t500\\t0.0\\n"
             ;;
         *input.fastq.gz*)
-            printf "input.fastq.gz\\tFASTQ\\tDNA\\t100\\t50000\\t200\\t500\\t1000\\t0.0\\t0.0\\t500\\t0.0\\n"
+            printf "input.fastq.gz\\tFASTQ\\tDNA\\t100\\t1000000000\\t200\\t500\\t1000\\t0.0\\t0.0\\t500\\t0.0\\n"
             ;;
         *)
-            printf "other.fastq.gz\\tFASTQ\\tDNA\\t50\\t25000\\t200\\t500\\t1000\\t0.0\\t0.0\\t500\\t0.0\\n"
+            printf "other.fastq.gz\\tFASTQ\\tDNA\\t50\\t800000000\\t200\\t500\\t1000\\t0.0\\t0.0\\t500\\t0.0\\n"
             ;;
     esac
     exit 0
@@ -107,7 +109,7 @@ exit 0
 def clean_mock():
     print("Cleaning up mock environment...")
     # Delete directories
-    for d in ["mock_bin", "pod5_dir", "autocycler_out", "01_qc", "02_genome_size", "assemblies"]:
+    for d in ["mock_bin", "pod5_dir", "autocycler_out", "plassembler_db", "subsampled_reads", "01_qc", "02_genome_size", "assemblies"]:
         if os.path.exists(d):
             shutil.rmtree(d, ignore_errors=True)
     # Delete files
@@ -115,7 +117,8 @@ def clean_mock():
         "input.fastq.gz", "filtered_input.fastq.gz", "sequencing_summary.txt",
         "polished_assembly.fasta", "pipeline.log", "dnaapler_reoriented.fasta",
         ".success_assembly", ".success_cluster", ".success_trim", "contig_depths.tsv",
-        "metrics.tsv", "contig_characteristics.tsv"
+        "metrics.tsv", "contig_characteristics.tsv", "plassembler_summary.tsv",
+        "rasusa_subsample.tsv", "subsample.yaml", "no_keep.log", "keep90.log"
     ]
     for file in to_delete:
         if os.path.exists(file):

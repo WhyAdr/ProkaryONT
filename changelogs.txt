@@ -1,6 +1,22 @@
 PROKARYONT PIPELINE CHANGELOG
 =============================
 
+Date: 2026-08-20
+Author: Codex
+
+patch-2008: Modular Stage Execution and Autocycler Extensions
+-------------------------------------------------------------
+1. Archived the former `prokaryont.sh`/`run_all.sh` master orchestration and Stage 6-7 annotation stack; active Stages 1-5 are now invoked explicitly and independently.
+2. Corrected direct-stage CLI > config > default precedence across active Stages 1-5.
+3. Made Filtlong `--keep_percent` opt-in and added wrapper-level range validation.
+4. Added direct Stage 3 `--assemblers` selection, LJA/iLesta helpers, and backward-compatible `wtdbg2` to `redbean` normalization with duplicate suppression.
+5. Added native Autocycler or independently seeded Rasusa subsampling while preserving the `sample_NN.fastq` downstream contract and recording Rasusa metadata.
+6. Added explicit, independently capped `--compress-threads` and `--combine-threads` controls (1-100).
+7. Wired the full Stage 3 read set, configurable depth k-mer, and capped threads into `autocycler combine` depth annotation.
+8. Added a non-mutating, default-on Plassembler PLSDB screen of every consensus contig with validated top-level `plassembler_summary.tsv` output.
+9. Added optional Dorado polish device selection, applied to both polish passes but not to Dorado basecalling or alignment.
+10. Expanded mock tools, cleanup, configuration, and documentation for the new modular workflow.
+
 Date: 2026-08-19
 Author: Codex
 

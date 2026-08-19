@@ -1,214 +1,178 @@
-# ProkaryONT 🧬
+# ProkaryONT
 
-ProkaryONT is a comprehensive, production-grade automated pipeline for **Oxford Nanopore Technologies (ONT)**-based prokaryotic genome assembly, polishing, taxonomic classification, quality assessment, and high-fidelity ensemble functional annotation.
+ProkaryONT is a step-by-step Oxford Nanopore bacterial genome assembly
+workflow. Each active stage is invoked separately so its outputs can be
+reviewed before the next stage starts. There is no active master orchestrator.
 
-It orchestrates industry-standard bioinformatics tools via a robust, subcommand-driven shell interface, allowing both rapid automated runs and hands-on, step-by-step manual curation.
+## Active workflow
 
----
+| Stage | Script | Purpose |
+|---|---|---|
+| 1 | `01_qc_estimate.sh` | Read QC and genome-size estimation |
+| 2 | `02_preprocess_filter.sh` | Optional trimming plus quality/length filtering |
+| 3 | `03_autocycler_assemble.sh` | Subsampling, multi-assembler Autocycler resolution, combine depth annotation, and PLSDB characterization |
+| 4 | `04_polish_orient.sh` | Dorado polishing and Dnaapler reorientation |
+| 5 | `05_taxonomy.sh` | GTDB-Tk classification, MLST, and 16S extraction |
 
-## 🗺️ Pipeline Overview
+The former `prokaryont.sh`, `run_all.sh`, Stage 6 assessment, and Stage 7
+annotation stack are retained under `archived/` for historical reference. They
+are not active entrypoints.
 
-The pipeline is split into three main execution phases: **Core Assembly & Polishing (Stages 1–4)**, **Primary Downstream Analysis (Taxonomy & Single-Tool Annotation)**, and an **Ensemble Annotation & Reconcilation Pipeline**.
+## Core requirements
 
-```mermaid
-graph TD
-    A[Raw ONT FASTQ + Summary] --> Stage1[Stage 1: QC & Estimate<br/>NanoPlot / LRGE / Raven / Meryl<br/>+ Fastcat / SDUST profile / Porechop_ABI scan / SNIKT]
-    Stage1 --> Stage2[Stage 2: Preprocess & Filter<br/>Porechop_ABI / Chopper / Seqkit / Filtlong<br/>+ Fastplong QC report]
-    Stage2 --> Stage3[Stage 3: Autocycler Assembly]
-    Stage3 --> C1{"🔍 Curation 1: Assemblies"}
-    C1 --> Stage2b[Clustering & tree QC<br/>autocycler cluster / ETE3]
-    Stage2b --> C2{"🔍 Curation 2: Clusters"}
-    C2 --> Stage2c[Trim, Resolve & Combine<br/>autocycler trim/resolve/combine / MUMmer]
-    Stage2c --> C3{"🔍 Curation 3: Dotplots"}
-    C3 --> Stage2d[Consensus Assembly + Depth Mapping]
-    Stage2d --> Stage4[Stage 4: Polish & Orient<br/>Dorado Polishing / Dnaapler Reorientation]
-    Stage4 --> FinalAssembly[Final Assembly: dnaapler_reoriented.fasta]
-    
-    FinalAssembly --> TaxStage[Taxonomy Stage<br/>GTDB-Tk / mlst / Barrnap 16S]
-    FinalAssembly --> AssessStage[Assess & Annotate Stage<br/>Bakta / QUAST / CheckM2 / BUSCO / Merqury]
-    
-    FinalAssembly --> EnsembleStage[Ensemble Annotation Pipeline]
-    EnsembleStage --> 07a[07a: Gene Prediction<br/>Pyrodigal / Glimmer3 / GeneMarkS-2]
-    EnsembleStage --> 07b[07b: Track A Annotation<br/>Bakta / DRAM / RASTtk]
-    EnsembleStage --> 07c[07c: Track B Annotation<br/>eggNOG-mapper / InterProScan / KofamScan / DIAMOND SwissProt]
-    EnsembleStage --> 07d[07d: Track C Annotation<br/>geNomad / Phanotate]
-    07a & 07b & 07c & 07d --> 07e[07e: Reconcile & Merge<br/>GFF3 / TSV / GenBank / JSON]
-```
+- QC/filtering: `NanoPlot`, `fastcat`, `porechop_abi`, `snikt.R`, `seqkit`,
+  `filtlong`, `fastplong`, and optional `chopper`
+- Assembly: current `autocycler`, GNU `parallel`, `samtools`, `minimap2`, and
+  the selected assembler helpers
+- Optional Rasusa mode: a Rasusa release exposing `rasusa reads`
+- PLSDB screen: `plassembler` plus its database
+- Polishing/orientation: `dorado`, `samtools`, and `dnaapler`
+- Taxonomy: `gtdbtk`; `mlst` and `barrnap` are optional
 
----
-
-## ✨ Key Features
-
-- **Automated Genome Size Estimation**: Integrates weighted estimates from `LRGE` (k-mer-based) and a fast `Raven` draft assembly (`(2*Raven + LRGE) / 3`) to configure downstream subsampling.
-- **Robust Subsample Assemblies**: Subsamples input reads and runs up to 10 assemblers in parallel (including `Flye`, `Canu`, `Hifiasm`, `Raven`, `Miniasm`, `MetaMDBG`, `Myloasm`, `Plassembler`, `NextDenovo`, and `Wtdbg2`) using GNU `Parallel`.
-- **ETE3-Based Tree Checks**: Evaluates the clustering tree dynamically to flag clades showing branch lengths exceeding $5\times$ the median or single-assembler dominance.
-- **Automated Plot Generation**: Distributes pairwise alignments using `Autocycler dotplot` for small replicons (plasmids) and `MUMmer` (nucmer + mummerplot) for chromosome-scale sequences to review overlap trimming.
-- **Real-Time Read-Depth Tracking**: Maps filtered reads back to consensus using `minimap2` and `samtools` to generate coverage metrics and flag high-copy-number replicons (depth $> 1.5\times$ relative to the chromosome).
-- **Dorado-Based Polishing**: Checks for moves tables (`mv:B:c` tags) in BAM files and prompts for read group resolution (unification, selection, or ignoring) in multi-read-group runs.
-- **Smart Reorientation**: Utilizes `Dnaapler` to locate start genes (e.g., `dnaA` for chromosomes, `repA` for plasmids, `terL` for phages) and rotate contigs to a standardized biological origin.
-- **Ensemble Annotation Engine**:
-  - **Genomic Predictions**: Merges predictions from `Pyrodigal`, `Glimmer3`, and `GeneMarkS-2` using a consensus algorithm with a Pyrodigal tiebreaker.
-  - **Assembly Features (Track A)**: Coordinates structural annotation via `Bakta`, `DRAM`, and imported BV-BRC `RASTtk` records.
-  - **Homology Databases (Track B)**: Consolidates predictions from `eggNOG-mapper`, `InterProScan`, `KofamScan`, and `DIAMOND SwissProt`.
-  - **Prophage Discovery (Track C)**: Extracts prophage intervals using `geNomad` and annotates phage-specific ORFs with `Phanotate`.
-  - **Consensus Reconciliation**: Merges all annotation data into a single `GFF3`, `TSV` annotation matrix, fully annotated `GenBank` flatfile, and an isolate summary `JSON`.
-
----
-
-## 🛠️ Installation & Dependencies
-
-To run the pipeline, ensure the following tools are available in your `$PATH`:
-
-### Phase 1: Assembly & Polishing
-- **Filtering & QC**: `filtlong`, `seqkit`, `NanoPlot`, `fastcat`, `porechop_abi`, `snikt.R`, `chopper`, `fastplong`
-- **Draft Estimation**: `lrge`, `raven`
-- **Subsampling & Assembly**: `autocycler` (v0.1.0+), `meryl`, `samtools`, GNU `parallel`, and desired assemblers (`flye`, `canu`, `hifiasm`, `metaMDBG`, `miniasm`, `minipolish`, `minimap2`, `plassembler`, etc.)
-- **Tree Analysis**: Python 3 with `ete3` library (optional)
-- **Dotplots**: `mummer` (specifically `nucmer`, `mummerplot`)
-- **Polishing & Reorientation**: `dorado`, `dnaapler`
-
-### Phase 2: Downstream & Annotation
-- **Taxonomy**: `gtdbtk` (requires GTDB reference DB), `mlst`, `barrnap`
-- **Assessment**: `quast`, `checkm2`, `busco` (with lineages), `merqury` (requires `merqury.sh`)
-- **Gene Finding**: `pyrodigal`, `glimmer3`
-- **Ensemble Annotation**: `bakta` (requires database), `DRAM.py`, `emapper.py` (eggNOG-mapper), `interproscan.sh`, `exec_annotation` (KofamScan), `diamond`, `genomad` (requires database), `phanotate.py`
-
----
-
-## ⚙️ Configuration (`pipeline.conf`)
-
-The configuration file `pipeline.conf` controls all paths, database locations, threads, and parameter thresholds. Key variables include:
-
-```bash
-# --- Required inputs ---
-input_fastq=input.fastq.gz
-sequencing_summary=sequencing_summary.txt
-pod5_dir=pod5_dir/
-sample_name=MyBacteria
-
-# --- Compute & Filtering ---
-threads=128
-read_type=ont_r10
-filtlong_min_length=200
-filtlong_keep_percent=90
-
-# --- Databases ---
-gtdbtk_data_path=/path/to/gtdbtk_db
-bakta_db=/path/to/bakta_db
-genomad_db=/path/to/genomad_db
-interproscan_db=/path/to/interproscan
-kofam_profiles=/path/to/kofam/profiles
-kofam_ko_list=/path/to/kofam/ko_list
-```
-
----
-
-## 🚀 Execution & Usage
-
-The main interface to the pipeline is `prokaryont.sh`.
-
-```bash
-chmod +x prokaryont.sh
-./prokaryont.sh --help
-```
-
-### 1. Full Automated Assembly (Stages 1–4)
-Runs read QC, filtering, multi-assembler subsampling, clustering, consensus combination, dorado polishing, and dnaapler reorientation.
-```bash
-./prokaryont.sh assemble --config pipeline.conf
-```
-
-> [!NOTE]
-> During assembly, the pipeline will pause at **Manual Curation Points** to allow file inspection (e.g., verifying draft assembly sizes, moving misclustered contigs, inspecting dotplots). You can bypass these pauses by passing the `--skip-curation` flag (or uncommenting `skip_curation=true` in the configuration).
-
-### 2. Resuming Execution
-If the pipeline halts during assembly or you wish to adjust parameters, you can resume from specific steps using:
-```bash
-./prokaryont.sh assemble --config pipeline.conf --resume-from [cluster|trim|dnaapler]
-```
-- `cluster`: Skips read filtering and assemblies, resumes from Autocycler clustering.
-  (post-split: resumes Stage 3 from clustering, skipping the subsample/multi-assembler step — assumes `filtered_input.fastq.gz` from Stage 2 already exists)
-- `trim`: Skips assembly and clustering, resumes from Autocycler overlap trimming/resolving.
-- `dnaapler`: Skips polishing, resumes from Dnaapler reorientation.
-
-### 3. Taxonomic Classification
-Executes GTDB-Tk classification, MLST typing, and Barrnap 16S rRNA gene extraction.
-```bash
-./prokaryont.sh taxonomy --config pipeline.conf
-```
-*Review the taxonomy outputs to update your organism details (genus, species, gram stain) in `pipeline.conf` prior to annotation.*
-
-### 4. Primary Annotation & QA
-Runs Bakta annotation and standard quality assessment metrics (QUAST, CheckM2, BUSCO, and Merqury).
-```bash
-./prokaryont.sh annotate --config pipeline.conf
-```
-
-### 5. Ensemble Annotation Pipeline
-For high-fidelity structural and functional annotation, run the ensemble scripts sequentially:
-
-```bash
-# A. Predict consensus gene coordinates
-bash 07a_predict_genes.sh --assembly dnaapler_reoriented.fasta --config pipeline.conf
-
-# B. Run assembly-level annotations (Track A)
-bash 07b_annotate_trackA.sh --assembly dnaapler_reoriented.fasta --bakta-db /path/to/bakta_db
-
-# C. Run protein-level sequential annotations (Track B)
-bash 07c_annotate_trackB.sh --consensus-proteins 13_gene_prediction/consensus/consensus_proteins.faa --config pipeline.conf
-
-# D. Run prophage annotation (Track C)
-bash 07d_annotate_trackC.sh --assembly dnaapler_reoriented.fasta --genomad-db /path/to/genomad_db
-
-# E. Reconcile and merge all annotation files
-bash 07e_reconcile_merge.sh \
-    --assembly dnaapler_reoriented.fasta \
-    --consensus-gff 13_gene_prediction/consensus/consensus_genes.gff3 \
-    --bakta-dir 14_trackA/bakta \
-    --emapper-out 15_trackB/eggnog \
-    --interproscan-out 15_trackB/interproscan \
-    --kofamscan-out 15_trackB/kofamscan \
-    --phanotate-gff 16_trackC_prophage/phanotate/phanotate_genes.gff3 \
-    --sample-name MyBacteria
-```
-
----
-
-## 📁 Output Directory Directory Structure
-
-Following a full run, the workspace directory will contain:
+The canonical Stage 3 helper set is:
 
 ```text
-├── 01_qc/                        # NanoPlot and raw-read diagnostic reports
-│   ├── fastcat_sdust/            # Stage 1 SDUST assessment TSVs (no read filtering)
-├── 02_genome_size/               # LRGE, Raven estimates, and Meryl histograms
-├── assemblies/                   # Fasta and job logs from subsampled assemblers
-├── autocycler_out/               # Autocycler compressed outputs and GFA clusters
-│   ├── cluster_metadata.tsv      # Per-cluster assembly and resolve metrics
-│   └── consensus_assembly.fasta  # Combined draft assembly
-├── 07_taxonomy/                  # GTDB-Tk, MLST, and Barrnap 16S fasta
-├── bakta_result/                 # Single-run Bakta annotation
-├── 10_quast/                     # QUAST assembly statistics
-├── 11_checkm2/                   # CheckM2 quality reports (completeness/contamination)
-├── 12_busco/                     # BUSCO conserved single-copy ortholog checks
-├── 13_gene_prediction/           # Multi-caller prediction outputs (Pyrodigal/Glimmer)
-├── 14_trackA/                    # Track A annotators (Bakta, DRAM)
-├── 15_trackB/                    # Track B database searches (eggNOG, Pfam, Kofam)
-├── 16_trackC_prophage/           # geNomad & Phanotate mobile element annotations
-├── 17_final_annotation/          # Final integrated ensemble annotations
-│   ├── final_annotation.gff3     # Fully reconciled GFF3 file
-│   ├── final_annotation.gbk      # Fully reconciled GenBank file
-│   ├── annotation_matrix.tsv     # Gene-by-annotation matrix
-│   └── summary.json              # Isolate summary statistics
-├── polished_assembly.fasta       # Dorado-polished assembly
-├── dnaapler_reoriented.fasta     # Polished and reoriented final genome
-├── contig_characteristics.tsv    # Combined length, cluster, depth, and copy number flags
-├── metrics.tsv                   # Autocycler metrics table with read statistics
-└── pipeline.log                  # Global execution log of the pipeline runs
+flye,canu,hifiasm,ilesta,lja,raven,miniasm,metamdbg,myloasm,plassembler,nextdenovo,redbean,necat
 ```
 
----
+`wtdbg2` remains accepted as a compatibility alias and is normalized to the
+current Autocycler helper task `redbean`. iLesta additionally requires
+`Ilesta`, `minipolish`, `minimap2`, and `racon`; LJA requires `lja`.
 
-## 📝 License
+## Step-by-step execution
 
-This project is licensed under the Apache License 2.0 - see the [LICENSE](file:///d:/W/ProkaryONT/LICENSE) file for details.
+Copy and edit `pipeline.conf`, then run each stage explicitly. CLI values take
+precedence over config values.
+
+### 1. QC and genome-size estimation
+
+```bash
+bash 01_qc_estimate.sh \
+  --config pipeline.conf \
+  --input-fastq input.fastq.gz \
+  --sequencing-summary sequencing_summary.txt
+```
+
+Review `01_qc/` and `02_genome_size/` before preprocessing.
+
+### 2. Preprocess and filter
+
+```bash
+bash 02_preprocess_filter.sh \
+  --config pipeline.conf \
+  --input-fastq input.fastq.gz
+```
+
+Filtlong `--keep_percent` is opt-in. Set `filtlong_keep_percent=N` or pass
+`--keep-percent N`; otherwise only the configured minimum-length filter is
+applied by Filtlong.
+
+### 3. Assemble with Autocycler
+
+Select assemblers directly on the Stage 3 CLI:
+
+```bash
+bash 03_autocycler_assemble.sh \
+  --config pipeline.conf \
+  --reads filtered_input.fastq.gz \
+  --read-type ont_r10 \
+  --assemblers flye,canu,hifiasm,ilesta,lja,raven,miniasm,metamdbg,myloasm,plassembler,nextdenovo,redbean,necat \
+  --plassembler-db /path/to/plassembler_db
+```
+
+The default subsampler remains native Autocycler. Rasusa can generate the same
+`subsampled_reads/sample_NN.fastq` contract with deterministic distinct seeds:
+
+```bash
+bash 03_autocycler_assemble.sh \
+  --reads filtered_input.fastq.gz \
+  --read-type ont_r10 \
+  --genome-size 5000000 \
+  --assemblers flye,lja,ilesta \
+  --subsampler rasusa \
+  --subsample-count 4 \
+  --subsample-seed 13 \
+  --rasusa-coverage 60 \
+  --plassembler-db /path/to/plassembler_db
+```
+
+Without `--rasusa-coverage`, Stage 3 derives an ensemble-oriented target from
+input depth and Autocycler's minimum-depth formula. Independently sampled
+Rasusa subsets can overlap substantially at high requested coverage; native
+Autocycler subsampling remains preferable when maximal subset independence is
+important.
+
+`autocycler compress` and `autocycler combine` are each capped at 100 threads.
+Override their independent caps with `--compress-threads N` and
+`--combine-threads N` (`1..100`). Combine receives the full Stage 3 input reads
+by default for final depth annotation; use `--combine-reads PATH` only for an
+intentional alternative. The depth k-mer defaults to 19 and can be changed with
+`--combine-depth-kmer` to an odd value from 11 through 31.
+
+Immediately after combine, Stage 3 runs a non-mutating PLSDB similarity screen
+against every Autocycler consensus contig and publishes
+`plassembler_summary.tsv`. This is characterization evidence, not a plasmid
+classification or replacement assembly. `autocycler_out/consensus_assembly.fasta`
+remains authoritative. Use `--skip-plsdb-screen` only when the screen is
+intentionally omitted.
+
+### 4. Polish and orient
+
+```bash
+bash 04_polish_orient.sh \
+  --config pipeline.conf \
+  --assembly autocycler_out/consensus_assembly.fasta \
+  --pod5-dir pod5_dir/ \
+  --device cuda:0
+```
+
+`--device` is passed only to `dorado polish`. It is reused for the optional
+second polish pass and does not constrain Dorado basecalling or alignment.
+
+### 5. Taxonomy
+
+```bash
+bash 05_taxonomy.sh \
+  --config pipeline.conf \
+  --assembly dnaapler_reoriented.fasta \
+  --gtdbtk-db /path/to/gtdbtk_db
+```
+
+## Important outputs
+
+```text
+01_qc/                                      Stage 1 and post-filter QC
+02_genome_size/                             Genome-size estimates
+assemblies/                                 Standardized helper assemblies and job logs
+autocycler_out/consensus_assembly.fasta     Authoritative Stage 3 consensus
+autocycler_out/consensus_assembly.gfa       Combined graph with depth metadata
+autocycler_out/consensus_assembly.yaml      Combined metadata
+autocycler_out/plassembler_plsdb/           PLSDB screen provenance
+plassembler_summary.tsv                     One PLSDB result row per consensus contig
+rasusa_subsample.tsv                        Rasusa subset provenance, when selected
+metrics.tsv                                 Autocycler metrics
+contig_depths.tsv                           Independent mapping-based depth report
+polished_assembly.fasta                     Dorado-polished assembly
+dnaapler_reoriented.fasta                   Reoriented final assembly
+07_taxonomy/                                Stage 5 outputs
+```
+
+## Laptop-safe mock checks
+
+The mock environment supports syntax and generated-command checks without
+claiming real bioinformatics validation:
+
+```bash
+python utils/generate_mock_environment.py
+export PATH="$(pwd)/mock_bin:$PATH"
+export PLASSEMBLER_DB="$(pwd)/plassembler_db"
+# run stage commands with --dry-run
+python utils/generate_mock_environment.py --clean
+```
+
+Real assembler, database, and GPU validation should be performed on the target
+HPC environment with representative reads and the production databases.
+
+## License
+
+Apache License 2.0; see `LICENSE`.

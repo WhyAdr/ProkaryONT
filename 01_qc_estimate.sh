@@ -20,13 +20,13 @@
 source "$(dirname "$0")/00_setup.sh"
 
 # --- Defaults ----------------------------------------------------------------
-threads="${threads:-128}"
+threads="${threads:-}"
 input_fastq="${input_fastq:-}"
 sequencing_summary="${sequencing_summary:-}"
 meryl_memory="${meryl_memory:-}"
-meryl_kmer_size="${meryl_kmer_size:-21}"
-nanoplot_color="${nanoplot_color:-green}"
-lrge_seed="${lrge_seed:-123}"
+meryl_kmer_size="${meryl_kmer_size:-}"
+nanoplot_color="${nanoplot_color:-}"
+lrge_seed="${lrge_seed:-}"
 # Keep these empty until after config loading so Stage 1 has the intended
 # precedence: CLI > pipeline.conf > hard-coded default.
 lint_threshold="${lint_threshold:-}"
@@ -75,6 +75,10 @@ done
 # --- Load config (CLI flags parsed above take priority) ----------------------
 [[ -n "${config_file}" ]] && load_config "${config_file}"
 
+threads="${threads:-128}"
+meryl_kmer_size="${meryl_kmer_size:-21}"
+nanoplot_color="${nanoplot_color:-green}"
+lrge_seed="${lrge_seed:-123}"
 lint_threshold="${lint_threshold:-20}"
 lint_window="${lint_window:-64}"
 

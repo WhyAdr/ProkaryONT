@@ -10,7 +10,7 @@
 #   --threads N                   Number of threads (default: 128)
 #   --min-length N                Filtlong minimum read length (default: 200)
 #   --min-qscore N                Seqkit minimum average read quality (default: 7)
-#   --keep-percent N              Filtlong keep percent (default: 90)
+#   --keep-percent N              Optional Filtlong keep percentage; omitted by default
 #   --enable-porechopabi-trim     Enable Porechop_ABI adapter trimming (default: off)
 #   --enable-chopper-trim         Enable Chopper end-trimming (default: off — gate on Stage 1/2 SNIKT+Porechop_ABI triage)
 #   --chopper-trim-approach NAME  fixed-crop | trim-by-quality | best-read-segment | split-by-low-quality (default: fixed-crop)
@@ -33,19 +33,19 @@ source "$(dirname "$0")/00_setup.sh"
 # This script runs Steps 4–8 (adapter trim, end-crop, complexity filter, QC filter, post-filter QC).
 
 # --- Defaults ----------------------------------------------------------------
-threads="${threads:-128}"
+threads="${threads:-}"
 input_fastq="${input_fastq:-}"
-filtlong_min_length="${filtlong_min_length:-200}"
-min_qscore="${min_qscore:-7}"
-filtlong_keep_percent="${filtlong_keep_percent:-90}"
+filtlong_min_length="${filtlong_min_length:-}"
+min_qscore="${min_qscore:-}"
+filtlong_keep_percent="${filtlong_keep_percent:-}"
 config_file="${config_file:-}"
-enable_porechopabi_trim="${enable_porechopabi_trim:-false}"
-enable_chopper_trim="${enable_chopper_trim:-false}"
-chopper_trim_approach="${chopper_trim_approach:-fixed-crop}"
-chopper_headcrop="${chopper_headcrop:-50}"
-chopper_tailcrop="${chopper_tailcrop:-30}"
+enable_porechopabi_trim="${enable_porechopabi_trim:-}"
+enable_chopper_trim="${enable_chopper_trim:-}"
+chopper_trim_approach="${chopper_trim_approach:-}"
+chopper_headcrop="${chopper_headcrop:-}"
+chopper_tailcrop="${chopper_tailcrop:-}"
 chopper_trim_cutoff="${chopper_trim_cutoff:-}"
-chopper_split_window="${chopper_split_window:-1}"
+chopper_split_window="${chopper_split_window:-}"
 # Keep Fastcat settings empty until after config loading so direct Stage 2
 # runs use the same CLI > pipeline.conf > default precedence as Stage 1.
 enable_fastcat_lint="${enable_fastcat_lint:-}"
@@ -65,7 +65,7 @@ usage() {
     echo "  --threads N                 Number of threads (default: 128)"
     echo "  --min-length N              Filtlong min read length in bp (default: 200)"
     echo "  --min-qscore N              Seqkit min average read quality (default: 7)"
-    echo "  --keep-percent N            Filtlong keep percent (default: 90)"
+    echo "  --keep-percent N            Optional Filtlong keep percentage; omitted by default"
     echo "  --enable-porechopabi-trim   Enable Porechop_ABI adapter trimming"
     echo "  --enable-chopper-trim       Enable Chopper end-trimming"
     echo "  --chopper-trim-approach N   fixed-crop | trim-by-quality | best-read-segment | split-by-low-quality (default: fixed-crop)"
@@ -111,10 +111,27 @@ done
 # --- Load config (CLI flags parsed above take priority) ----------------------
 [[ -n "${config_file}" ]] && load_config "${config_file}"
 
+threads="${threads:-128}"
+filtlong_min_length="${filtlong_min_length:-200}"
+min_qscore="${min_qscore:-7}"
+enable_porechopabi_trim="${enable_porechopabi_trim:-false}"
+enable_chopper_trim="${enable_chopper_trim:-false}"
+chopper_trim_approach="${chopper_trim_approach:-fixed-crop}"
+chopper_headcrop="${chopper_headcrop:-50}"
+chopper_tailcrop="${chopper_tailcrop:-30}"
+chopper_split_window="${chopper_split_window:-1}"
 enable_fastcat_lint="${enable_fastcat_lint:-false}"
 lint_threshold="${lint_threshold:-20}"
 lint_window="${lint_window:-64}"
 lint_max_proportion="${lint_max_proportion:-0.95}"
+
+if [[ -n "${filtlong_keep_percent}" ]]; then
+    if [[ ! "${filtlong_keep_percent}" =~ ^[0-9]+([.][0-9]+)?$ ]] ||
+       ! awk -v value="${filtlong_keep_percent}" \
+           'BEGIN { exit (value > 0 && value <= 100) ? 0 : 1 }'; then
+        log_error "--keep-percent must be a number greater than 0 and at most 100."
+    fi
+fi
 
 # Set GZIP_BIN now that threads are parsed
 export GZIP_BIN="$(get_gzip_cmd)"
@@ -242,7 +259,11 @@ fi
 # 02_filter_assemble.sh STEP 2 quality/length filtering)
 # ==============================================================================
 
-log_step "Step 7: Filtering reads (min_qscore=${min_qscore}, min_length=${filtlong_min_length}, keep=${filtlong_keep_percent}%)"
+if [[ -n "${filtlong_keep_percent}" ]]; then
+    log_step "Step 7: Filtering reads (min_qscore=${min_qscore}, min_length=${filtlong_min_length}, keep=${filtlong_keep_percent}%)"
+else
+    log_step "Step 7: Filtering reads (min_qscore=${min_qscore}, min_length=${filtlong_min_length}; keep-percent disabled)"
+fi
 
 if [[ -s "${filtered_reads}" ]] && gzip -t "${filtered_reads}" 2>/dev/null; then
     log_info "Found valid existing ${filtered_reads}. Skipping filtering..."
@@ -270,9 +291,14 @@ else
     _qfilt_tmp="$(mktemp --suffix=.fastq)"
     run_cmd seqkit seq --min-qual "${min_qscore}" "${_preproc_input}" -o "${_qfilt_tmp}"
 
-    # Step 7b: Length / keep-percent filter with filtlong
-    run_cmd bash -c 'set -o pipefail; filtlong --min_length "$1" --keep_percent "$2" "$3" | ${GZIP_BIN} > "$4"' \
-        _ "${filtlong_min_length}" "${filtlong_keep_percent}" "${_qfilt_tmp}" "${filtered_reads}"
+    # Step 7b: Length filter with optional explicit keep-percent ranking.
+    filtlong_args=(--min_length "${filtlong_min_length}")
+    if [[ -n "${filtlong_keep_percent}" ]]; then
+        filtlong_args+=(--keep_percent "${filtlong_keep_percent}")
+    fi
+    filtlong_args+=("${_qfilt_tmp}")
+    run_cmd bash -c 'set -o pipefail; output=$1; shift; filtlong "$@" | ${GZIP_BIN} > "$output"' \
+        _ "${filtered_reads}" "${filtlong_args[@]}"
 
     rm -f "${_qfilt_tmp}"
 fi
@@ -307,7 +333,11 @@ if [[ "${_input_count}" != "?" && "${_filtered_count}" != "?" && "${_input_count
     _retention=$(awk -v f="${_filtered_count}" -v i="${_input_count}" 'BEGIN{printf "%.1f", (f/i)*100}')
     log_info "Read retention: ${_filtered_count} / ${_input_count} reads (${_retention}%)"
     if awk -v r="${_retention}" 'BEGIN{exit (r < 65.0) ? 0 : 1}'; then
-        log_warn "Less than 65% of reads survived filtering. Review --min-qscore and --keep-percent."
+        if [[ -n "${filtlong_keep_percent}" ]]; then
+            log_warn "Less than 65% of reads survived filtering. Review --min-qscore, --min-length, and --keep-percent."
+        else
+            log_warn "Less than 65% of reads survived filtering. Review --min-qscore and --min-length."
+        fi
     fi
 fi
 
