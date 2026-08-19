@@ -12,7 +12,7 @@ The pipeline is split into three main execution phases: **Core Assembly & Polish
 
 ```mermaid
 graph TD
-    A[Raw ONT FASTQ + Summary] --> Stage1[Stage 1: QC & Estimate<br/>NanoPlot / LRGE / Raven / Meryl<br/>+ Fastcat / Porechop_ABI scan / SNIKT]
+    A[Raw ONT FASTQ + Summary] --> Stage1[Stage 1: QC & Estimate<br/>NanoPlot / LRGE / Raven / Meryl<br/>+ Fastcat / SDUST profile / Porechop_ABI scan / SNIKT]
     Stage1 --> Stage2[Stage 2: Preprocess & Filter<br/>Porechop_ABI / Chopper / Seqkit / Filtlong<br/>+ Fastplong QC report]
     Stage2 --> Stage3[Stage 3: Autocycler Assembly]
     Stage3 --> C1{"🔍 Curation 1: Assemblies"}
@@ -179,7 +179,8 @@ bash 07e_reconcile_merge.sh \
 Following a full run, the workspace directory will contain:
 
 ```text
-├── 01_qc/                        # NanoPlot quality reports for raw/filtered reads
+├── 01_qc/                        # NanoPlot and raw-read diagnostic reports
+│   ├── fastcat_sdust/            # Stage 1 SDUST assessment TSVs (no read filtering)
 ├── 02_genome_size/               # LRGE, Raven estimates, and Meryl histograms
 ├── assemblies/                   # Fasta and job logs from subsampled assemblers
 ├── autocycler_out/               # Autocycler compressed outputs and GFA clusters

@@ -28,7 +28,8 @@
 
 source "$(dirname "$0")/00_setup.sh"
 
-# Steps 1–3 run in 01_qc_estimate.sh (Fastcat, Porechop_ABI scan, SNIKT baseline).
+# Steps 1–3 run in 01_qc_estimate.sh (Fastcat statistics/SDUST profile,
+# Porechop_ABI scan, SNIKT baseline).
 # This script runs Steps 4–8 (adapter trim, end-crop, complexity filter, QC filter, post-filter QC).
 
 # --- Defaults ----------------------------------------------------------------
@@ -45,10 +46,12 @@ chopper_headcrop="${chopper_headcrop:-50}"
 chopper_tailcrop="${chopper_tailcrop:-30}"
 chopper_trim_cutoff="${chopper_trim_cutoff:-}"
 chopper_split_window="${chopper_split_window:-1}"
-enable_fastcat_lint="${enable_fastcat_lint:-false}"
-lint_threshold="${lint_threshold:-20}"
-lint_window="${lint_window:-64}"
-lint_max_proportion="${lint_max_proportion:-0.95}"
+# Keep Fastcat settings empty until after config loading so direct Stage 2
+# runs use the same CLI > pipeline.conf > default precedence as Stage 1.
+enable_fastcat_lint="${enable_fastcat_lint:-}"
+lint_threshold="${lint_threshold:-}"
+lint_window="${lint_window:-}"
+lint_max_proportion="${lint_max_proportion:-}"
 
 # --- Usage -------------------------------------------------------------------
 usage() {
@@ -107,6 +110,11 @@ done
 
 # --- Load config (CLI flags parsed above take priority) ----------------------
 [[ -n "${config_file}" ]] && load_config "${config_file}"
+
+enable_fastcat_lint="${enable_fastcat_lint:-false}"
+lint_threshold="${lint_threshold:-20}"
+lint_window="${lint_window:-64}"
+lint_max_proportion="${lint_max_proportion:-0.95}"
 
 # Set GZIP_BIN now that threads are parsed
 export GZIP_BIN="$(get_gzip_cmd)"
@@ -214,17 +222,18 @@ fi
 
 if [[ "${enable_fastcat_lint}" == "true" ]]; then
     log_step "Step 6b: Low-complexity filtering with Fastcat lint..."
+    log_info "Review 01_qc/fastcat_sdust/ before choosing this filtering threshold."
     _lint_tmp="$(mktemp --suffix=.fastq)"
     mkdir -p "${qc_dir}"
     
-    run_cmd bash -c 'fastcat lint --threshold "$1" --window "$2" --max-proportion "$3" "$4" 2>>"$5" > "$6"' \
+    run_cmd bash -c 'fastcat lint --threshold "$1" --window "$2" --max-proportion "$3" "$4" 2>"$5" > "$6"' \
         _ "${lint_threshold}" "${lint_window}" "${lint_max_proportion}" "${_preproc_input}" "${qc_dir}/02_lint_rejected.log" "${_lint_tmp}"
     
     [[ "${_preproc_input}" != "${input_fastq}" ]] && rm -f "${_preproc_input}"
     _preproc_input="${_lint_tmp}"
     log_info "Post-Fastcat_lint read count: $(_count_reads "${_preproc_input}")"
     
-    rejected_count=$(grep -c "skipping" "${qc_dir}/02_lint_rejected.log" 2>/dev/null || echo 0)
+    rejected_count=$(awk '/skipping/{count++} END{print count + 0}' "${qc_dir}/02_lint_rejected.log")
     log_info "Fastcat lint completed. Rejected ${rejected_count} low-complexity reads (logged to 01_qc/02_lint_rejected.log)."
 fi
 

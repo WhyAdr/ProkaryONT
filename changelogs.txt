@@ -1,6 +1,17 @@
 PROKARYONT PIPELINE CHANGELOG
 =============================
 
+Date: 2026-08-19
+Author: Codex
+
+Stage 1 SDUST Assessment and Fastcat Lint Reliability
+------------------------------------------------------
+1. Added a non-destructive Fastcat SDUST census to `01_qc_estimate.sh`, producing raw stderr provenance, a positive-read TSV, a distribution histogram, a key/value summary, and a high-burden candidate list under `01_qc/fastcat_sdust/`.
+2. Added Stage 1 `--lint-threshold` and `--lint-window` overrides with CLI > config > default precedence; these shared SDUST parameters now govern both the Stage 1 assessment and optional Stage 2 filtering.
+3. Documented SDUST assessment outputs and the Stage 1-to-Stage 2 review workflow in `pipeline.conf`, `README.md`, and `testing_guidelines.md`.
+4. Changed Stage 2 Fastcat lint logging to overwrite its rejection log per run and count rejections safely when none are present.
+5. Enhanced the mock Fastcat binary with representative zero-SDUST and SDUST-positive output for structural assessment testing.
+
 Date: 2026-07-12
 Author: Antigravity (AI coding assistant)
 

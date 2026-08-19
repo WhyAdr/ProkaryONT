@@ -45,6 +45,22 @@ python utils/generate_mock_environment.py --clean
 ```
 This guarantees that no test artifacts (FASTQ, fasta, logs, or metrics tables) are left behind in the workspace.
 
+### 4. Verify the SDUST assessment artifacts
+
+Stage 1 profiles SDUST low-complexity burden without modifying the input FASTQ.
+After a non-dry Stage 1 run, inspect `01_qc/fastcat_sdust/` and confirm that
+the partition invariant holds:
+
+```text
+total_reads = zero_sdust_reads + sdust_positive_reads
+```
+
+The machine-readable outputs are `sdust_summary.tsv`,
+`sdust_fraction_hist.tsv`, `sdust_positive_reads.tsv`, and
+`sdust_high_burden_reads.tsv`. The reported masked fractions originate from
+Fastcat stderr and are rounded by Fastcat; they must not be converted into
+claimed exact masked-base counts.
+
 ---
 
 ## 🚫 Git Policies for Test Artifacts

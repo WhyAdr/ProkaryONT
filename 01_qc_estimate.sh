@@ -11,6 +11,8 @@
 #   --memory N              Memory in GB for Meryl (default: auto from system)
 #   --kmer-size N           K-mer size for Meryl (default: 21)
 #   --nanoplot-color C      Color for NanoPlot graphs (default: green)
+#   --lint-threshold N      SDUST repetition threshold for profiling (default: 20)
+#   --lint-window N         SDUST window size for profiling (default: 64)
 #   --dry-run               Print commands without executing
 #   --help                  Show this help
 # ==============================================================================
@@ -25,6 +27,10 @@ meryl_memory="${meryl_memory:-}"
 meryl_kmer_size="${meryl_kmer_size:-21}"
 nanoplot_color="${nanoplot_color:-green}"
 lrge_seed="${lrge_seed:-123}"
+# Keep these empty until after config loading so Stage 1 has the intended
+# precedence: CLI > pipeline.conf > hard-coded default.
+lint_threshold="${lint_threshold:-}"
+lint_window="${lint_window:-}"
 config_file="${config_file:-}"
 
 # --- Usage -------------------------------------------------------------------
@@ -41,6 +47,8 @@ usage() {
     echo "  --memory N                  Memory in GB for Meryl (default: auto)"
     echo "  --kmer-size N               K-mer size for Meryl (default: 21)"
     echo "  --nanoplot-color C          Color for NanoPlot graphs (default: green)"
+    echo "  --lint-threshold N          SDUST repetition threshold for profiling (default: 20)"
+    echo "  --lint-window N             SDUST window size for profiling (default: 64)"
     echo "  --dry-run                   Print commands without executing"
     echo "  --help                      Show this help"
     exit 0
@@ -56,6 +64,8 @@ while [[ $# -gt 0 ]]; do
         --memory)             meryl_memory="$2"; shift 2 ;;
         --kmer-size)          meryl_kmer_size="$2"; shift 2 ;;
         --nanoplot-color)     nanoplot_color="$2"; shift 2 ;;
+        --lint-threshold)     lint_threshold="$2"; shift 2 ;;
+        --lint-window)        lint_window="$2"; shift 2 ;;
         --dry-run)            dry_run=true; shift ;;
         --help|-h)            usage ;;
         *) log_error "Unknown flag: $1. Use --help for usage." ;;
@@ -64,6 +74,9 @@ done
 
 # --- Load config (CLI flags parsed above take priority) ----------------------
 [[ -n "${config_file}" ]] && load_config "${config_file}"
+
+lint_threshold="${lint_threshold:-20}"
+lint_window="${lint_window:-64}"
 
 # Set GZIP_BIN now that threads are parsed
 export GZIP_BIN="$(get_gzip_cmd)"
@@ -116,7 +129,7 @@ fi
 log_info ">>> CHECK: Open ${qc_dir}/NanoPlot_sample/NanoPlot-report.html"
 
 # ==============================================================================
-# STEP 2 — Preprocessing Diagnostics: Fastcat, Porechop_ABI Scan & SNIKT
+# STEP 2 — Preprocessing Diagnostics: Fastcat, SDUST, Porechop_ABI Scan & SNIKT
 # ==============================================================================
 
 log_step "Step 2: Preprocessing diagnostics"
@@ -126,6 +139,80 @@ log_info "Running Fastcat per-file summary statistics..."
 mkdir -p "${qc_dir}/fastcat_histograms"
 run_cmd bash -c 'fastcat --histograms "$1" -f "$2" "$3" > /dev/null' \
     _ "${qc_dir}/fastcat_histograms" "${qc_dir}/fastcat_per_file_stats.tsv" "${input_fastq}"
+
+# --- Fastcat lint: exhaustive SDUST low-complexity profile ------------------
+# This diagnostic pass deliberately uses max-proportion=0.0. Fastcat sends
+# every SDUST-positive read to stderr and writes only zero-SDUST reads to
+# stdout, which gives an exhaustive read-level partition without retaining a
+# second FASTQ. Fastcat reports fractions rounded to two decimal places, so do
+# not infer exact masked-base counts from this output.
+sdust_dir="${qc_dir}/fastcat_sdust"
+mkdir -p "${sdust_dir}"
+log_info "Profiling read low-complexity burden with Fastcat SDUST (T=${lint_threshold}, W=${lint_window}; diagnostic only)..."
+
+if [[ -n "${dry_run:-}" ]]; then
+    run_cmd bash -c 'set -o pipefail; fastcat lint --threshold "$1" --window "$2" --max-proportion 0.0 "$3" 2> "$4" | awk "END { print int(NR / 4) }" > "$5"' \
+        _ "${lint_threshold}" "${lint_window}" "${input_fastq}" "${sdust_dir}/lint_p0.stderr.log" "${sdust_dir}/zero_sdust_reads.txt"
+    log_info "[DRY-RUN] SDUST profile artifacts would be written to ${sdust_dir}/"
+else
+    run_cmd bash -c 'set -o pipefail; fastcat lint --threshold "$1" --window "$2" --max-proportion 0.0 "$3" 2> "$4" | awk "END { print int(NR / 4) }" > "$5"' \
+        _ "${lint_threshold}" "${lint_window}" "${input_fastq}" "${sdust_dir}/lint_p0.stderr.log" "${sdust_dir}/zero_sdust_reads.txt"
+
+    {
+        printf 'read_id\treported_masked_fraction\n'
+        sed -nE 's/.*Read ([^ ]+) masked fraction ([0-9.]+) exceeds threshold [0-9.]+, skipping\..*/\1\t\2/p' \
+            "${sdust_dir}/lint_p0.stderr.log"
+    } > "${sdust_dir}/sdust_positive_reads.tsv"
+
+    zero_sdust_reads="$(awk 'NR == 1 { print $1; exit }' "${sdust_dir}/zero_sdust_reads.txt")"
+    zero_sdust_reads="${zero_sdust_reads:-0}"
+    sdust_positive_reads="$(awk 'NR > 1 { count++ } END { print count + 0 }' "${sdust_dir}/sdust_positive_reads.tsv")"
+    skipped_log_lines="$(awk '/skipping\./ { count++ } END { print count + 0 }' "${sdust_dir}/lint_p0.stderr.log")"
+
+    if [[ "${skipped_log_lines}" -ne "${sdust_positive_reads}" ]]; then
+        log_error "Could not parse every Fastcat lint rejection from ${sdust_dir}/lint_p0.stderr.log; no SDUST summary was produced."
+    fi
+
+    total_sdust_reads=$((zero_sdust_reads + sdust_positive_reads))
+    zero_sdust_fraction="$(awk -v zero="${zero_sdust_reads}" -v total="${total_sdust_reads}" 'BEGIN { if (total) printf "%.6f", zero / total; else printf "0.000000" }')"
+    sdust_positive_fraction="$(awk -v positive="${sdust_positive_reads}" -v total="${total_sdust_reads}" 'BEGIN { if (total) printf "%.6f", positive / total; else printf "0.000000" }')"
+    reported_gt_050="$(awk -F '\t' 'NR > 1 && $2 > 0.50 { count++ } END { print count + 0 }' "${sdust_dir}/sdust_positive_reads.tsv")"
+    reported_gt_080="$(awk -F '\t' 'NR > 1 && $2 > 0.80 { count++ } END { print count + 0 }' "${sdust_dir}/sdust_positive_reads.tsv")"
+    reported_gt_090="$(awk -F '\t' 'NR > 1 && $2 > 0.90 { count++ } END { print count + 0 }' "${sdust_dir}/sdust_positive_reads.tsv")"
+    reported_gt_095="$(awk -F '\t' 'NR > 1 && $2 > 0.95 { count++ } END { print count + 0 }' "${sdust_dir}/sdust_positive_reads.tsv")"
+    reported_fraction_max="$(awk -F '\t' 'NR > 1 && $2 > max { max = $2 } END { printf "%.2f", max + 0 }' "${sdust_dir}/sdust_positive_reads.tsv")"
+
+    {
+        printf 'masked_fraction\tread_count\n'
+        printf '0.00\t%s\n' "${zero_sdust_reads}"
+        awk -F '\t' 'NR > 1 { count[$2]++ } END { for (fraction in count) print fraction, count[fraction] }' OFS='\t' \
+            "${sdust_dir}/sdust_positive_reads.tsv" | sort -n
+    } > "${sdust_dir}/sdust_fraction_hist.tsv"
+
+    {
+        head -n 1 "${sdust_dir}/sdust_positive_reads.tsv"
+        awk -F '\t' 'NR > 1 && $2 >= 0.80' "${sdust_dir}/sdust_positive_reads.tsv" | sort -t $'\t' -k2,2nr
+    } > "${sdust_dir}/sdust_high_burden_reads.tsv"
+
+    {
+        printf 'metric\tvalue\n'
+        printf 'sdust_threshold\t%s\n' "${lint_threshold}"
+        printf 'sdust_window\t%s\n' "${lint_window}"
+        printf 'total_reads\t%s\n' "${total_sdust_reads}"
+        printf 'zero_sdust_reads\t%s\n' "${zero_sdust_reads}"
+        printf 'sdust_positive_reads\t%s\n' "${sdust_positive_reads}"
+        printf 'zero_sdust_fraction\t%s\n' "${zero_sdust_fraction}"
+        printf 'sdust_positive_fraction\t%s\n' "${sdust_positive_fraction}"
+        printf 'reported_fraction_gt_0.50\t%s\n' "${reported_gt_050}"
+        printf 'reported_fraction_gt_0.80\t%s\n' "${reported_gt_080}"
+        printf 'reported_fraction_gt_0.90\t%s\n' "${reported_gt_090}"
+        printf 'reported_fraction_gt_0.95\t%s\n' "${reported_gt_095}"
+        printf 'reported_fraction_max\t%s\n' "${reported_fraction_max}"
+    } > "${sdust_dir}/sdust_summary.tsv"
+
+    log_info "SDUST complexity profile: total=${total_sdust_reads}; zero-SDUST=${zero_sdust_reads}; SDUST-positive=${sdust_positive_reads}; reported >0.80=${reported_gt_080}; >0.90=${reported_gt_090}; >0.95=${reported_gt_095}; max=${reported_fraction_max}"
+    log_info ">>> CHECK: ${sdust_dir}/sdust_summary.tsv, sdust_fraction_hist.tsv, sdust_high_burden_reads.tsv"
+fi
 
 # --- Porechop_ABI: ab-initio adapter discovery scan (report only) -----------
 log_info "Running Porechop_ABI ab-initio adapter discovery (report only, no trimming)..."
@@ -144,7 +231,8 @@ mkdir -p "${qc_dir}/snikt_baseline"
 run_cmd bash -c 'cd "$1" && snikt.R --notrim "$2"' \
     _ "${qc_dir}/snikt_baseline" "${input_fastq}"
 
-log_info ">>> CHECK: Review ${qc_dir}/fastcat_per_file_stats.tsv, porechop_abi_scan.log, snikt_baseline/ — these inform whether Stage 2 trimming is warranted"
+log_info ">>> CHECK: Review ${qc_dir}/fastcat_per_file_stats.tsv, fastcat_sdust/, porechop_abi_scan.log, snikt_baseline/ — these inform whether Stage 2 trimming is warranted"
+log_info ">>> CHECK SDUST tail before enabling Stage 2 Fastcat filtering."
 
 # ==============================================================================
 # STEP 3 — Genome Size Estimation
@@ -217,4 +305,4 @@ log_info "Raven size:     ${raven_size:-N/A} bp"
 log_info "Mean (Weight):  ${mean_genome_size:-N/A} bp"
 log_info "NanoPlot:       ${qc_dir}/"
 log_info "Meryl db:       ${genome_size_dir}/genome.meryl"
-log_info "Diagnostics:    ${qc_dir}/ (fastcat_per_file_stats.tsv / porechop_abi_scan.log / snikt_baseline/)"
+log_info "Diagnostics:    ${qc_dir}/ (fastcat_per_file_stats.tsv / fastcat_sdust/ / porechop_abi_scan.log / snikt_baseline/)"

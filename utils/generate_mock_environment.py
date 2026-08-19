@@ -59,6 +59,15 @@ if [ "$1" = "stats" ]; then
 fi
 exit 0
 """)
+        elif tool == "fastcat":
+            with open(path, "w", newline="\n") as f:
+                f.write("""#!/bin/sh
+if [ "$1" = "lint" ]; then
+    printf '@mock_zero_sdust\\nACTG\\n+\\nIIII\\n'
+    printf 'Read mock_sdust_positive masked fraction 0.99 exceeds threshold 0.00, skipping.\\n' >&2
+fi
+exit 0
+""")
         else:
             with open(path, "w", newline="\n") as f:
                 f.write("#!/bin/sh\nexit 0\n")
@@ -81,7 +90,7 @@ exit 0
     print("  Created blank files: " + ", ".join(FILES))
 
     # 4. Write dummy gzip FASTQ records
-    fastq_data = b"@read1\nACTG\n+\nIIII\n"
+    fastq_data = b"@read1\nACTG\n+\nIIII\n@read2\nCCCC\n+\nIIII\n"
     with gzip.open("input.fastq.gz", "wb") as f:
         f.write(fastq_data)
     with gzip.open("filtered_input.fastq.gz", "wb") as f:
