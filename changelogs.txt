@@ -1,6 +1,18 @@
 PROKARYONT PIPELINE CHANGELOG
 =============================
 
+Date: 2026-08-25
+Author: Antigravity (AI coding assistant)
+
+Comprehensive Conda Environment Setup and Runtime Compatibility Hardening
+-------------------------------------------------------------------------
+1. Created `conda-environment-setup-for-each-prokaryont-script.md` providing audited, isolated per-stage Conda/Mamba environment specifications (`prokaryont-stage1-qc` through `prokaryont-stage5-taxonomy`) and Slurm HPC batch templates.
+2. Documented mandatory `-c nanoporetech` channel requirement for `fastcat` to prevent package resolution failures under strict channel priority.
+3. Standardized SNIKT installation to use the official Bioconda `snikt` recipe (resolving `seqtk` and R dependencies automatically) and documented the `snikt.R -> snikt` binary alias check.
+4. Documented `nextdenovo -> nextDenovo` case-sensitivity symlink compatibility for Stage 3 pre-flight validation on Linux filesystems.
+5. Added explicit `openjdk>=11` to the Stage 3 environment specification to guarantee Java runtime and JVM heap stability for Canu overlap/gatekeeper jobs.
+6. Updated `README.md` with links and operational guidance for the modular environment setup.
+
 Date: 2026-08-20
 Author: Codex
 

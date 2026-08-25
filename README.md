@@ -39,6 +39,29 @@ flye,canu,hifiasm,ilesta,lja,raven,miniasm,metamdbg,myloasm,plassembler,nextdeno
 current Autocycler helper task `redbean`. iLesta additionally requires
 `Ilesta`, `minipolish`, `minimap2`, and `racon`; LJA requires `lja`.
 
+## Environment setup
+
+For comprehensive per-stage Conda/Mamba YAML environment files, Slurm batch
+templates, and package verification steps, see:
+
+👉 [`conda-environment-setup-for-each-prokaryont-script.md`](conda-environment-setup-for-each-prokaryont-script.md)
+
+### Essential Conda channel configuration
+
+```bash
+conda config --add channels defaults
+conda config --add channels conda-forge
+conda config --add channels bioconda
+conda config --add channels nanoporetech   # required for fastcat
+conda config --set channel_priority strict
+```
+
+> [!TIP]
+> Use modular per-stage environments (`prokaryont-stage1-qc` through
+> `prokaryont-stage5-taxonomy`) to prevent solver conflicts across C++, R,
+> Java, and CUDA runtimes. Dorado should be installed via its official
+> standalone release rather than Conda to ensure host GPU driver compatibility.
+
 ## Step-by-step execution
 
 Copy and edit `pipeline.conf`, then run each stage explicitly. CLI values take
