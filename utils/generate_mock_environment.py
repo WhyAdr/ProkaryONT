@@ -7,36 +7,61 @@
 #   python utils/generate_mock_environment.py --clean  # Remove mock environment
 # ==============================================================================
 
-import os
-import sys
-import stat
 import gzip
+import os
 import shutil
+import stat
+import sys
 
 TOOLS = [
-    "NanoPlot", "lrge", "raven", "meryl", "fastcat", "porechop_abi",
-    "snikt.R", "filtlong", "seqkit", "fastplong", "autocycler",
-    "parallel", "dorado", "samtools", "dnaapler", "necat",
-    "canu", "flye", "metaMDBG", "miniasm", "minipolish", "minimap2",
-    "plassembler", "hifiasm", "myloasm", "nextdenovo", "wtdbg2",
-    "rasusa", "lja", "Ilesta", "racon",
-    "nucmer", "mummerplot"
+    "NanoPlot",
+    "lrge",
+    "raven",
+    "meryl",
+    "fastcat",
+    "porechop_abi",
+    "snikt.R",
+    "filtlong",
+    "seqkit",
+    "fastplong",
+    "autocycler",
+    "parallel",
+    "dorado",
+    "samtools",
+    "dnaapler",
+    "necat",
+    "canu",
+    "flye",
+    "metaMDBG",
+    "miniasm",
+    "minipolish",
+    "minimap2",
+    "plassembler",
+    "hifiasm",
+    "myloasm",
+    "nextdenovo",
+    "wtdbg2",
+    "rasusa",
+    "lja",
+    "Ilesta",
+    "racon",
+    "nucmer",
+    "mummerplot",
 ]
 
-FILES = [
-    "sequencing_summary.txt",
-    "polished_assembly.fasta"
-]
+FILES = ["sequencing_summary.txt", "polished_assembly.fasta"]
 
 DIRS = [
     "pod5_dir",
     "autocycler_out",
     "plassembler_db",
+    "mock_contig_policy",
 ]
+
 
 def setup_mock():
     print("Setting up mock testing environment...")
-    
+
     # 1. Create mock_bin directory and executables
     os.makedirs("mock_bin", exist_ok=True)
     for tool in TOOLS:
@@ -70,13 +95,36 @@ if [ "$1" = "lint" ]; then
 fi
 exit 0
 """)
+        elif tool == "minimap2":
+            with open(path, "w", newline="\n") as f:
+                f.write("""#!/bin/sh
+if [ "${1:-}" = "--version" ]; then
+    printf 'mock-minimap2 1.0\\n'
+    exit 0
+fi
+case " $* " in
+    *" -x asm5 "*)
+        query=''
+        target=''
+        for argument in "$@"; do
+            target="$query"
+            query="$argument"
+        done
+        if [ "$query" = "$target" ] && grep -q '^>contained$' "$query" 2>/dev/null \
+           && grep -q '^>target$' "$query" 2>/dev/null; then
+            printf 'contained\\t100\\t0\\t100\\t+\\ttarget\\t120\\t0\\t100\\t100\\t100\\t60\\n'
+        fi
+        ;;
+esac
+exit 0
+""")
         else:
             with open(path, "w", newline="\n") as f:
                 f.write("#!/bin/sh\nexit 0\n")
         try:
             st = os.stat(path)
             os.chmod(path, st.st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
-        except Exception:
+        except OSError:
             pass
     print("  Created mock binaries in mock_bin/")
 
@@ -103,36 +151,88 @@ exit 0
     with open(os.path.join("autocycler_out", "consensus_assembly.fasta"), "w") as f:
         pass
     print("  Created mock autocycler consensus assembly.")
+
+    # 6. Create deterministic post-assembly assessment fixtures.
+    with open(
+        os.path.join("mock_contig_policy", "normal.fasta"), "w", newline="\n"
+    ) as f:
+        f.write(">normal_1\nACGTACGT\n>normal_2\nAACCGGTT\n")
+    fragmented_records = [("target", "A" * 120), ("contained", "C" * 100)]
+    for index in range(24):
+        length = 121 + index
+        sequence = ("ACGT" * ((length // 4) + 1))[:length]
+        sequence = sequence[:-4] + f"{index:04d}".translate(
+            str.maketrans("0123456789", "ACGTACGTAC")
+        )
+        fragmented_records.append((f"unique_{index:02d}", sequence))
+    with open(
+        os.path.join("mock_contig_policy", "fragmented.fasta"), "w", newline="\n"
+    ) as f:
+        for identifier, sequence in fragmented_records:
+            f.write(f">{identifier}\n{sequence}\n")
+    with open(
+        os.path.join("mock_contig_policy", "contained.paf"), "w", newline="\n"
+    ) as f:
+        f.write("contained\t100\t0\t100\t+\ttarget\t120\t0\t100\t100\t100\t60\n")
+    print("  Created mock post-assembly contig-policy FASTA/PAF fixtures.")
     print("\nMock environment setup successfully!")
-    print("Run dry-runs using: export PATH=\"$(pwd)/mock_bin:$PATH\"")
+    print('Run dry-runs using: export PATH="$(pwd)/mock_bin:$PATH"')
+
 
 def clean_mock():
     print("Cleaning up mock environment...")
     # Delete directories
-    for d in ["mock_bin", "pod5_dir", "autocycler_out", "plassembler_db", "subsampled_reads", "01_qc", "02_genome_size", "assemblies"]:
+    for d in [
+        "mock_bin",
+        "pod5_dir",
+        "autocycler_out",
+        "plassembler_db",
+        "subsampled_reads",
+        "01_qc",
+        "02_genome_size",
+        "assemblies",
+        "assemblies_prepared",
+        "assembly_assessment",
+        "mock_contig_policy",
+        ".test-tmp",
+    ]:
         if os.path.exists(d):
             shutil.rmtree(d, ignore_errors=True)
     # Delete files
     to_delete = [
-        "input.fastq.gz", "filtered_input.fastq.gz", "sequencing_summary.txt",
-        "polished_assembly.fasta", "pipeline.log", "dnaapler_reoriented.fasta",
-        ".success_assembly", ".success_cluster", ".success_trim", "contig_depths.tsv",
-        "metrics.tsv", "contig_characteristics.tsv", "plassembler_summary.tsv",
-        "rasusa_subsample.tsv", "subsample.yaml", "no_keep.log", "keep90.log"
+        "input.fastq.gz",
+        "filtered_input.fastq.gz",
+        "sequencing_summary.txt",
+        "polished_assembly.fasta",
+        "pipeline.log",
+        "dnaapler_reoriented.fasta",
+        ".success_assembly",
+        ".success_cluster",
+        ".success_trim",
+        "contig_depths.tsv",
+        "metrics.tsv",
+        "contig_characteristics.tsv",
+        "plassembler_summary.tsv",
+        "rasusa_subsample.tsv",
+        "subsample.yaml",
+        "no_keep.log",
+        "keep90.log",
     ]
     for file in to_delete:
         if os.path.exists(file):
             try:
                 os.remove(file)
-            except Exception:
+            except OSError:
                 pass
     print("Cleaned up successfully.")
+
 
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--clean":
         clean_mock()
     else:
         setup_mock()
+
 
 if __name__ == "__main__":
     main()

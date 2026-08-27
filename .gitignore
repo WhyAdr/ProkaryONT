@@ -17,6 +17,8 @@ pipeline.log
 
 # Assembly intermediates
 assemblies/
+assemblies_prepared/
+assembly_assessment/
 autocycler_out/
 subsampled_reads/
 ragtag_output/
@@ -36,6 +38,8 @@ subsample.yaml
 
 # Mock testing inputs/binaries
 mock_bin/
+.test-tmp/
+__pycache__/
 pod5_dir/
 sequencing_summary.txt
 

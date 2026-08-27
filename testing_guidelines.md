@@ -55,14 +55,43 @@ bash 04_polish_orient.sh \
   --dry-run
 ```
 
-### 3. Clean up the Environment
+The Stage 3 dry-run must show both `autocycler compress` and `autocycler
+cluster` with the same `--max_contigs` placeholder. Because dry-run mode does
+not count real assembler FASTAs, it deliberately labels the effective value
+`DRY_RUN_UNAVAILABLE`.
+
+### 3. Run deterministic contig-policy tests
+
+The standard-library test suites exercise strict FASTA/PAF parsing,
+single-target containment, exact equal-length duplicate handling, conditional
+minimap2 invocation, prepared-copy preservation, guard decisions, successful
+PAF deletion, and fingerprint reuse:
+
+```bash
+python3 -m unittest discover -s tests -v
+python3 -m py_compile dedup_contained.py tests/test_dedup_contained.py \
+  tests/test_stage3_contig_policy.py utils/generate_mock_environment.py
+bash -n 03_autocycler_assemble.sh
+```
+
+`utils/generate_mock_environment.py` also creates
+`mock_contig_policy/{normal,fragmented}.fasta` and a representative
+`contained.paf` for manual inspection. These fixtures and the mock minimap2 are
+structural tests only; they are not biological validation.
+
+For a successful fragmented-assembly fixture, confirm that
+`assembly_assessment/dedup/*.events.tsv`, `*.minimap2.log`, and `*.dedup.log`
+remain while the corresponding `*.paf` has been deleted. On failure, inspect
+the reported `assembly_assessment.tmp.<pid>/dedup/` directory before cleanup.
+
+### 4. Clean up the Environment
 Once testing is finished, remove all mock directories and files by running the clean flag:
 ```bash
 python utils/generate_mock_environment.py --clean
 ```
 This guarantees that no test artifacts (FASTQ, fasta, logs, or metrics tables) are left behind in the workspace.
 
-### 4. Verify the SDUST assessment artifacts
+### 5. Verify the SDUST assessment artifacts
 
 Stage 1 profiles SDUST low-complexity burden without modifying the input FASTQ.
 After a non-dry Stage 1 run, inspect `01_qc/fastcat_sdust/` and confirm that

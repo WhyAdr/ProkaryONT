@@ -1,6 +1,19 @@
 PROKARYONT PIPELINE CHANGELOG
 =============================
 
+Date: 2026-08-27
+Author: Codex
+
+Conditional Post-Assembly Contig Assessment and Guarded Autocycler Inputs
+-------------------------------------------------------------------------
+1. Added strict, dependency-free contained-contig filtering with single-target/strand grouping, safe 0.99 coverage and identity defaults, no default length-only deletion, and exact-only equal-length duplicate collapse.
+2. Added per-record event TSVs and validation for malformed FASTA/PAF records, duplicate IDs, stale lengths, unknown IDs, invalid coordinates, and unsafe thresholds.
+3. Preserved assembler FASTAs and atomically prepared separate `assemblies_prepared/` inputs; containment cleanup runs only above the configurable per-file fragmentation trigger.
+4. Added pre/post assembly reports, tool logs, versions, source/policy and prepared-output SHA-256 manifests, safe resume reuse, and immutable curation summaries under `assembly_assessment/`.
+5. Deleted successful-run self-alignment PAFs after report reconciliation while retaining TSV summaries and diagnostic logs; failure evidence remains available in the reported temporary directory.
+6. Added guarded `--max-contigs` handling: both Autocycler commands receive the same explicit value, the default 25 is never silently raised, and an excessive prepared mean stops with the minimum required override.
+7. Added CLI/config controls, realistic mock fixtures, 15 utility tests, and 13 focused Stage 3 policy tests. Production biological/performance validation remains an HPC acceptance task.
+
 Date: 2026-08-25
 Author: Antigravity (AI coding assistant)
 

@@ -132,6 +132,28 @@ by default for final depth annotation; use `--combine-reads PATH` only for an
 intentional alternative. The depth k-mer defaults to 19 and can be changed with
 `--combine-depth-kmer` to an odd value from 11 through 31.
 
+After assembler jobs finish, Stage 3 preserves `assemblies/` and constructs the
+exact Autocycler inputs under `assemblies_prepared/`. Every non-empty assembly
+is validated and counted. Only an individual assembly with more than
+`dedup_trigger_contigs` records (default 25) is self-aligned and assessed for
+contained contigs. Automatic containment requires at least 99% single-target
+coverage and 99% aggregate identity; equal-length records are collapsed only
+when their complete sequences are identical, including reverse-complement
+identity. No contig is removed solely for being short by default.
+
+The pre/post counts, decisions, per-contig event TSVs, tool logs, versions,
+input-policy fingerprint, and prepared-output SHA-256 manifest are written to
+`assembly_assessment/`. Successful PAF
+files are deleted after the event reports reconcile; failure PAFs remain in the
+temporary failure directory for diagnosis. Use `--skip-contained-dedup` for an
+assessment-only run.
+
+Autocycler's `--max_contigs` is a cohort-wide mean guard, not a per-file
+maximum. Stage 3 passes an explicit value to both `compress` and `cluster`. It
+uses 25 when the prepared mean is at most 25 and otherwise stops before
+compression with the minimum required override. An intentional override can be
+provided with `--max-contigs N`; it is never raised automatically.
+
 Immediately after combine, Stage 3 runs a non-mutating PLSDB similarity screen
 against every Autocycler consensus contig and publishes
 `plassembler_summary.tsv`. This is characterization evidence, not a plasmid
@@ -167,6 +189,8 @@ bash 05_taxonomy.sh \
 01_qc/                                      Stage 1 and post-filter QC
 02_genome_size/                             Genome-size estimates
 assemblies/                                 Standardized helper assemblies and job logs
+assemblies_prepared/                        Validated, weighted inputs supplied to Autocycler
+assembly_assessment/                        Pre/post counts, event TSVs, logs, and fingerprints
 autocycler_out/consensus_assembly.fasta     Authoritative Stage 3 consensus
 autocycler_out/consensus_assembly.gfa       Combined graph with depth metadata
 autocycler_out/consensus_assembly.yaml      Combined metadata
