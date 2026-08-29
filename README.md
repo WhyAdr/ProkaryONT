@@ -93,6 +93,10 @@ Common CLI/config mappings:
 
 | CLI option | `pipeline.conf` key |
 |---|---|
+| `--output-dir` | `output_dir` |
+| `--output-fastq` | `output_fastq` |
+| `--sample-name` | `sample_name` |
+| `--tmp-dir` | `tmp_dir` |
 | `--min-length` | `filtlong_min_length` |
 | `--keep-percent` | `filtlong_keep_percent` |
 | `--genome-size` | `genome_size_override` |
@@ -115,11 +119,15 @@ shell syntax, so complex nested quoting is not preserved.
 ```bash
 bash 01_qc_estimate.sh \
   --config pipeline.conf \
-  --input-fastq input.fastq.gz \
-  --sequencing-summary sequencing_summary.txt
+  --input-fastq input.fastq.gz
 ```
 
-Review `01_qc/` and `02_genome_size/` before preprocessing.
+`--sequencing-summary` is optional; when supplied, it adds the summary-based
+NanoPlot report. All other Stage 1 diagnostics remain default-on and expose
+individual `--skip-*` flags. Stage 1 records LRGE and Raven independently in
+`02_genome_size/genome_size_estimates.tsv`; it does not create a weighted
+authoritative estimate. Review `01_qc/` and `02_genome_size/` before
+preprocessing.
 
 ### 2. Preprocess and filter
 
@@ -130,8 +138,24 @@ bash 02_preprocess_filter.sh \
 ```
 
 Filtlong `--keep_percent` is opt-in. Set `filtlong_keep_percent=N` or pass
-`--keep-percent N`; otherwise only the configured minimum-length filter is
-applied by Filtlong.
+`--keep-percent N`; otherwise SeqKit applies the probability-space mean-Q and
+minimum-length filters in one pass and Filtlong is not invoked. Stage 2 writes
+`02_filtering_metrics.tsv` with read/base changes, retention, length, N50,
+quality, and coverage (when `--genome-size` is explicitly supplied). Zero-read
+output is a hard failure; no universal 65% retention threshold is imposed. Use
+`--skip-intermediate-metrics` when scratch/runtime matters more than per-step
+attribution; input and final metrics are still retained.
+
+Stages 1 and 2 preserve the historical current-directory layout by default.
+Use `--output-dir`, `--output-fastq`, `--sample-name`, and `--tmp-dir` for an
+explicit namespace. Each stage writes a completion manifest last and resumes
+only when its input metadata, effective parameters, tool versions, and expected
+outputs match. A mismatch fails closed unless `--force` is supplied. Metadata
+identity is the default; `--input-sha256` opts into a full input hash.
+
+`--dry-run` is mutation-free: it validates the CLI, inputs, enabled tool
+contracts, and prints the commands, but creates no directories, temporary
+files, logs, outputs, or manifests.
 
 ### 3. Assemble with Autocycler
 
@@ -245,8 +269,12 @@ bash 05_taxonomy.sh \
 
 ```text
 01_qc/                                      Stage 1 and post-filter QC
-02_genome_size/                             Genome-size estimates
+02_genome_size/genome_size_estimates.tsv   Independent LRGE/Raven diagnostics
+02_filtering_metrics.tsv                    Stage-by-stage read/base/Q/length metrics
 filtered_input.fastq.gz                     Authoritative Stage 2 to Stage 3 handoff
+.prokaryont_stage1.complete.tsv             Stage 1 identity/completion contract
+.prokaryont_stage2.complete.tsv             Stage 2 identity/completion contract
+provenance/                                  Run-specific commands, options, tools, and versions
 subsample.yaml                              Native Autocycler subsampling provenance, when present
 subsampled_reads/                           Subset metadata directory; sample FASTQs are removed after assembly
 assemblies/                                 Standardized helper assemblies and job logs

@@ -40,8 +40,8 @@ YAML does not by itself make it a direct script-level contract.
 
 | Stage | Unconditional hard checks | Conditional hard checks | Soft or optional checks |
 |---|---|---|---|
-| 1 | <code>NanoPlot</code>, <code>lrge</code>, <code>raven</code>, <code>meryl</code>, <code>fastcat</code>, <code>porechop_abi</code>, <code>snikt.R</code> | - | <code>pigz</code> is used when present; otherwise <code>gzip</code> |
-| 2 | <code>filtlong</code>, <code>seqkit</code>, <code>NanoPlot</code>, <code>snikt.R</code>, <code>fastplong</code> | <code>porechop_abi</code>, <code>chopper</code>, and <code>fastcat</code> when their modes are enabled | <code>pigz</code> is used when present; otherwise <code>gzip</code> |
+| 1 | Python 3 plus every default-on diagnostic not explicitly skipped | <code>NanoPlot</code>, <code>fastcat</code>, <code>porechop_abi</code>, <code>snikt.R</code>, <code>lrge</code>, <code>raven</code>, and <code>meryl</code> are each conditional on their <code>--skip-*</code> flag | <code>pigz</code> is used when present |
+| 2 | Python 3, <code>seqkit</code>, and <code>gzip</code> | <code>filtlong</code> only with <code>--keep-percent</code>; <code>porechop_abi</code>, <code>snikt.R</code>, <code>chopper</code>, and <code>fastcat</code> only when enabled; <code>NanoPlot</code>/<code>fastplong</code> unless skipped | <code>pigz</code> is used when present |
 | 3 | <code>autocycler</code>, <code>parallel</code>, <code>seqkit</code>, <code>minimap2</code>, <code>samtools</code>, <code>python3</code> | <code>rasusa</code> for Rasusa subsampling; <code>plassembler</code> unless the PLSDB screen is skipped | <code>nucmer</code> and <code>mummerplot</code> enable optional dotplots; <code>pigz</code> is optional |
 | 4 | <code>dorado</code>, <code>samtools</code>, <code>dnaapler</code> | - | <code>pigz</code> is optional |
 | 5 | <code>gtdbtk</code> | - | <code>mlst</code> and <code>barrnap</code> are skipped when absent |
@@ -116,6 +116,12 @@ paths:
   ln -s "${CONDA_PREFIX}/bin/snikt" "${CONDA_PREFIX}/bin/snikt.R"
 ~~~
 
+The environment pins Fastcat to the unified 1.x CLI used by both
+<code>fastcat fastq</code> and <code>fastcat lint</code>. Diagnostics are
+default-on for continuity, but every module has a skip flag and skipped tools
+are not required by preflight. Stage 1 metadata identity is inexpensive by
+default; pass <code>--input-sha256</code> when a full read-file hash is required.
+
 Static command check:
 
 ~~~bash
@@ -134,8 +140,11 @@ conda activate prokaryont-stage2-preproc
 ~~~
 
 Apply the same inspected <code>snikt.R</code> compatibility symlink if needed.
-The YAML includes all three conditional tools so the corresponding opt-in modes
-can be enabled without changing environments.
+The YAML includes all conditional tools so the corresponding opt-in modes can
+be enabled without changing environments. Chopper is pinned to 0.13.x for the
+four trimming modes and <code>--split-window</code>; Fastcat is pinned to its
+unified 1.x interface. Stage 2 requires SNIKT only when Porechop trimming and
+the post-trim SNIKT diagnostic are both enabled.
 
 Static command check:
 

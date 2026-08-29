@@ -18,8 +18,9 @@ dependencies:
 
   # Direct conditional requirements for opt-in trimming/lint modes.
   - porechop_abi>=0.5.0
-  - chopper>=0.7.0
-  - fastcat>=0.18.0
+  # The trimming modes and --split-window contract are from Chopper 0.13.
+  - chopper>=0.13.0,<0.14
+  - fastcat>=1.0.1,<2
 
 # Stage 2 checks for the executable name `snikt.R`. If this package exposes
 # only `snikt`, follow the compatibility-symlink step in the environment guide.

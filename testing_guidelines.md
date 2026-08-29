@@ -6,7 +6,7 @@ This document outlines how to safely test and dry-run the ProkaryONT assembly pi
 
 ## 🛠️ The Testing Utility: `generate_mock_environment.py`
 
-Located at [generate_mock_environment.py](utils/generate_mock_environment.py), this Python script automates the creation and cleanup of test fixtures, including fake executable binaries (which return exit code `0`) and valid gzipped sequence structures.
+Located at [generate_mock_environment.py](utils/generate_mock_environment.py), this Python script automates the creation and cleanup of test fixtures. The Stage 1/2 mocks validate supported subcommands and options and produce representative reports rather than returning success for arbitrary syntax.
 
 ### 1. Setup the Mock Environment
 Before testing, run the python script from the root of the repository to generate all necessary directories, mock files, and executables:
@@ -32,6 +32,10 @@ export PLASSEMBLER_DB="$(pwd)/plassembler_db"
 
 # Examples: validate the changed active-stage command contracts
 rm -f filtered_input.fastq.gz
+bash 01_qc_estimate.sh \
+  --input-fastq input.fastq.gz \
+  --memory 1 \
+  --dry-run
 bash 02_preprocess_filter.sh --input-fastq input.fastq.gz --dry-run > no_keep.log 2>&1
 ! grep -q -- '--keep_percent' no_keep.log
 bash 02_preprocess_filter.sh --input-fastq input.fastq.gz --keep-percent 90 --dry-run > keep90.log 2>&1
@@ -77,7 +81,8 @@ PAF deletion, and fingerprint reuse:
 python3 -m unittest discover -s tests -v
 python3 -m py_compile dedup_contained.py tests/test_dedup_contained.py \
   tests/test_stage3_contig_policy.py tests/test_documentation_cli_contracts.py \
-  utils/generate_mock_environment.py
+  tests/test_stage1_stage2_hardening.py utils/generate_mock_environment.py \
+  utils/stage_contract.py
 bash -n 01_qc_estimate.sh 02_preprocess_filter.sh \
   03_autocycler_assemble.sh 04_polish_orient.sh 05_taxonomy.sh
 ```
@@ -111,9 +116,22 @@ total_reads = zero_sdust_reads + sdust_positive_reads
 
 The machine-readable outputs are `sdust_summary.tsv`,
 `sdust_fraction_hist.tsv`, `sdust_positive_reads.tsv`, and
-`sdust_high_burden_reads.tsv`. The reported masked fractions originate from
-Fastcat stderr and are rounded by Fastcat; they must not be converted into
-claimed exact masked-base counts.
+`sdust_high_burden_reads.tsv`. The histogram distinguishes `exact_zero` from
+`positive_reported` values that Fastcat rounded to `0.00`. Reported masked
+fractions originate from Fastcat stderr and must not be converted into claimed
+exact masked-base counts. `sdust_summary.tsv` separately records the rejection
+count from a count-only pass at the exact configured Stage 2 threshold.
+
+### 6. Verify strict dry-run and completion contracts
+
+For Stages 1 and 2, snapshot the target directory before and after `--dry-run`;
+the file tree must be identical. A real run writes its completion manifest
+only after every expected output validates. Repeating an identical run should
+resume immediately, while changing an input metadata field, effective option,
+or tool version must fail closed until `--force` is supplied. Run
+`tests/test_stage1_stage2_hardening.py` for deterministic coverage of these
+contracts, input/output alias rejection, metadata-versus-SHA identity, atomic
+FASTQ validation, and every optional Stage 2 dry-run branch.
 
 ---
 

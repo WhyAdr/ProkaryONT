@@ -877,11 +877,8 @@ fi
 if [[ -n "${genome_size_override}" ]]; then
     genome_size="${genome_size_override}"
     log_info "9a. Using user-provided genome size: ${genome_size}"
-elif [[ -f "${genome_size_dir}/mean_genome_size.txt" ]]; then
-    genome_size=$(cat "${genome_size_dir}/mean_genome_size.txt")
-    log_info "9a. Using weighted mean genome size from QC step: ${genome_size}"
 else
-    log_info "9a. Estimating genome size from input reads..."
+    log_info "9a. Estimating genome size from the selected filtered reads..."
     if [[ -n "${dry_run:-}" ]]; then
         log_info "[DRY-RUN] autocycler helper genome_size --reads ${input_reads} --threads ${threads}"
         genome_size="DRY_RUN_PLACEHOLDER"
@@ -891,8 +888,8 @@ else
     fi
     log_info "Autocycler genome size: ${genome_size}"
 fi
-if [[ -f "${genome_size_dir}/lrge_output.txt" ]]; then
-    log_info "LRGE estimate: $(cat "${genome_size_dir}/lrge_output.txt")"
+if [[ -f "${genome_size_dir}/genome_size_estimates.tsv" ]]; then
+    log_info "Stage 1 LRGE/Raven diagnostics are recorded in ${genome_size_dir}/genome_size_estimates.tsv; they are not authoritative Stage 3 inputs."
 fi
 
 # Pre-flight: measure available depth for the selected subsampling strategy.

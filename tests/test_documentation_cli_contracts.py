@@ -1,16 +1,38 @@
-from pathlib import Path
 import unittest
-
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class DocumentationCliContractTests(unittest.TestCase):
+    def test_stage1_stage2_layout_and_identity_flags_are_documented(self) -> None:
+        for filename in ("01_qc_estimate.sh", "02_preprocess_filter.sh"):
+            with self.subTest(filename=filename):
+                source = (ROOT / filename).read_text(encoding="utf-8")
+                for option in (
+                    "--output-dir",
+                    "--sample-name",
+                    "--tmp-dir",
+                    "--input-sha256",
+                    "--force",
+                    "--dry-run",
+                ):
+                    self.assertIn(option, source)
+        self.assertIn(
+            "--output-fastq",
+            (ROOT / "02_preprocess_filter.sh").read_text(encoding="utf-8"),
+        )
+
+    def test_stage1_stage2_tool_interfaces_are_pinned(self) -> None:
+        stage1 = (ROOT / "envs" / "env_stage1_qc.yml").read_text()
+        stage2 = (ROOT / "envs" / "env_stage2_preproc.yml").read_text()
+        self.assertIn("fastcat>=1.0.1,<2", stage1)
+        self.assertIn("fastcat>=1.0.1,<2", stage2)
+        self.assertIn("chopper>=0.13.0,<0.14", stage2)
+
     def test_stage3_default_and_optional_synopsis(self) -> None:
         source = (ROOT / "03_autocycler_assemble.sh").read_text(encoding="utf-8")
-        self.assertIn(
-            'assembler_list="flye,canu,hifiasm,miniasm,myloasm"', source
-        )
+        self.assertIn('assembler_list="flye,canu,hifiasm,miniasm,myloasm"', source)
         self.assertIn('echo "Usage: $(basename "$0") [OPTIONS]"', source)
 
     def test_stage4_read_group_is_validated_and_forwarded_twice(self) -> None:

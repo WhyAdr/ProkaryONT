@@ -21,6 +21,7 @@ TOOLS = [
     "fastcat",
     "porechop_abi",
     "snikt.R",
+    "chopper",
     "filtlong",
     "seqkit",
     "fastplong",
@@ -59,6 +60,228 @@ DIRS = [
 ]
 
 
+MOCK_TOOL_SCRIPT = r"""#!/bin/sh
+tool=$(basename "$0")
+
+if [ "${1:-}" = "--version" ] || [ "${1:-}" = "-V" ]; then
+    printf 'mock-%s 1.0.1\n' "$tool"
+    exit 0
+fi
+
+case "$tool" in
+    NanoPlot)
+        out=''
+        while [ "$#" -gt 0 ]; do
+            case "$1" in
+                -o|--outdir) out=$2; shift 2 ;;
+                *) shift ;;
+            esac
+        done
+        [ -n "$out" ] || exit 2
+        mkdir -p "$out"
+        printf '<html>mock NanoPlot</html>\n' > "$out/NanoPlot-report.html"
+        ;;
+    fastcat)
+        subcommand=${1:-}
+        shift || true
+        case "$subcommand" in
+            fastq)
+                if [ "${1:-}" = "--help" ]; then
+                    printf '%s\n' 'fastcat fastq --force-error --output DIRECTORY'
+                    exit 0
+                fi
+                out=''
+                input=''
+                while [ "$#" -gt 0 ]; do
+                    case "$1" in
+                        --force-error) shift ;;
+                        --output|-o) out=$2; shift 2 ;;
+                        --sample|-s) shift 2 ;;
+                        --*) exit 2 ;;
+                        *) input=$1; shift ;;
+                    esac
+                done
+                [ -n "$out" ] && [ ! -e "$out" ] || exit 2
+                mkdir -p "$out/histograms"
+                printf 'filename\tn_seqs\tn_bases\nmock.fastq.gz\t2\t8\n' > "$out/per_file.txt"
+                printf 'lower\tupper\tcount\n0\t10\t2\n' > "$out/histograms/length.hist"
+                printf 'lower\tupper\tcount\n0\t20\t2\n' > "$out/histograms/quality.hist"
+                printf 'filename\tbasecaller\tcount\nmock.fastq.gz\tmock\t2\n' > "$out/basecallers.txt"
+                printf 'filename\trun_id\tcount\nmock.fastq.gz\tmock-run\t2\n' > "$out/runids.tsv"
+                if gzip -t "$input" 2>/dev/null; then gzip -dc "$input"; else cat "$input"; fi
+                ;;
+            lint)
+                if [ "${1:-}" = "--help" ]; then
+                    printf '%s\n' 'fastcat lint --threshold N --window N --max-proportion P'
+                    exit 0
+                fi
+                maximum=0.95
+                input=''
+                while [ "$#" -gt 0 ]; do
+                    case "$1" in
+                        --threshold|--window) shift 2 ;;
+                        --max-proportion) maximum=$2; shift 2 ;;
+                        --*) exit 2 ;;
+                        *) input=$1; shift ;;
+                    esac
+                done
+                printf '@mock_zero_sdust\nACTG\n+\nIIII\n'
+                awk -v m="$maximum" 'BEGIN { exit (0.99 > m) ? 0 : 1 }' && \
+                    printf 'Read mock_sdust_positive masked fraction 0.99 exceeds threshold %s, skipping.\n' "$maximum" >&2
+                ;;
+            *) exit 2 ;;
+        esac
+        ;;
+    seqkit)
+        subcommand=${1:-}
+        shift || true
+        case "$subcommand" in
+            stats)
+                printf 'file\tformat\ttype\tnum_seqs\tsum_len\tmin_len\tavg_len\tmax_len\tQ1\tQ2\tQ3\tN50\tN50_num\tQ20\tQ30\tAvgQual\tGC\n'
+                case "$*" in
+                    *filtered_input.fastq.gz*|*.tmp.*)
+                        printf 'filtered.fastq.gz\tFASTQ\tDNA\t50\t800000000\t200\t16000000\t30000000\t1000\t5000\t10000\t12000\t20\t90.0\t80.0\t12.5\t50.0\n'
+                        ;;
+                    *input.fastq.gz*)
+                        printf 'input.fastq.gz\tFASTQ\tDNA\t100\t1000000000\t100\t10000000\t30000000\t900\t4500\t9000\t11000\t25\t85.0\t75.0\t11.0\t50.0\n'
+                        ;;
+                    *)
+                        printf 'other.fastq\tFASTQ\tDNA\t75\t900000000\t200\t12000000\t30000000\t950\t4750\t9500\t11500\t22\t88.0\t78.0\t12.0\t50.0\n'
+                        ;;
+                esac
+                ;;
+            seq)
+                input=''
+                output=''
+                while [ "$#" -gt 0 ]; do
+                    case "$1" in
+                        -o|--out-file) output=$2; shift 2 ;;
+                        --min-qual|--min-len|-m) shift 2 ;;
+                        -*) shift ;;
+                        *) input=$1; shift ;;
+                    esac
+                done
+                [ -n "$input" ] && [ -n "$output" ] || exit 2
+                if gzip -t "$input" 2>/dev/null; then gzip -dc "$input" > "$output"; else cat "$input" > "$output"; fi
+                ;;
+            *) exit 0 ;;
+        esac
+        ;;
+    lrge)
+        printf '5000000\n'
+        ;;
+    raven)
+        graph=''
+        while [ "$#" -gt 0 ]; do
+            case "$1" in
+                --graphical-fragment-assembly) graph=$2; shift 2 ;;
+                --threads|-p) shift 2 ;;
+                *) shift ;;
+            esac
+        done
+        [ -z "$graph" ] || printf 'H\tVN:Z:1.0\n' > "$graph"
+        printf '>mock_raven\nACGTACGT\n'
+        ;;
+    meryl)
+        if [ "${1:-}" = "count" ]; then
+            out=''
+            previous=''
+            for argument in "$@"; do
+                [ "$previous" = "output" ] && out=$argument
+                previous=$argument
+            done
+            [ -n "$out" ] || exit 2
+            mkdir -p "$out"
+            printf 'mock meryl db\n' > "$out/merylIndex"
+        elif [ "${1:-}" = "histogram" ]; then
+            printf '1\t10\n2\t5\n'
+        fi
+        ;;
+    porechop_abi)
+        input=''
+        output=''
+        scan=false
+        while [ "$#" -gt 0 ]; do
+            case "$1" in
+                -i) input=$2; shift 2 ;;
+                -o) output=$2; shift 2 ;;
+                --guess_adapter_only) scan=true; shift ;;
+                --threads) shift 2 ;;
+                *) shift ;;
+            esac
+        done
+        if [ "$scan" = true ]; then
+            printf 'mock adapter diagnostic\n'
+        elif [ -n "$output" ]; then
+            if gzip -t "$input" 2>/dev/null; then gzip -dc "$input" > "$output"; else cat "$input" > "$output"; fi
+        fi
+        ;;
+    snikt.R)
+        printf 'mock SNIKT diagnostic\n' > snikt_report.txt
+        ;;
+    chopper)
+        if [ "${1:-}" = "--help" ]; then
+            printf '%s\n' 'chopper --trim-approach MODE --split-window N --input FILE'
+            exit 0
+        fi
+        input=''
+        while [ "$#" -gt 0 ]; do
+            case "$1" in
+                --input|-i) input=$2; shift 2 ;;
+                --trim-approach|--headcrop|--tailcrop|--cutoff|--split-window|--minlength|--threads) shift 2 ;;
+                *) shift ;;
+            esac
+        done
+        [ -n "$input" ] || exit 2
+        if gzip -t "$input" 2>/dev/null; then gzip -dc "$input"; else cat "$input"; fi
+        ;;
+    filtlong)
+        input=''
+        while [ "$#" -gt 0 ]; do
+            case "$1" in
+                --keep_percent|--min_length) shift 2 ;;
+                --*) shift ;;
+                *) input=$1; shift ;;
+            esac
+        done
+        [ -n "$input" ] || exit 2
+        if gzip -t "$input" 2>/dev/null; then gzip -dc "$input"; else cat "$input"; fi
+        ;;
+    fastplong)
+        html=''
+        json=''
+        while [ "$#" -gt 0 ]; do
+            case "$1" in
+                --html) html=$2; shift 2 ;;
+                --json) json=$2; shift 2 ;;
+                -i|--thread) shift 2 ;;
+                *) shift ;;
+            esac
+        done
+        [ -z "$html" ] || printf '<html>mock Fastplong</html>\n' > "$html"
+        [ -z "$json" ] || printf '{"mock": true}\n' > "$json"
+        ;;
+    minimap2)
+        case " $* " in
+            *" -x asm5 "*)
+                query=''
+                target=''
+                for argument in "$@"; do target="$query"; query="$argument"; done
+                if [ "$query" = "$target" ] && grep -q '^>contained$' "$query" 2>/dev/null \
+                   && grep -q '^>target$' "$query" 2>/dev/null; then
+                    printf 'contained\t100\t0\t100\t+\ttarget\t120\t0\t100\t100\t100\t60\n'
+                fi
+                ;;
+        esac
+        ;;
+    *)
+        exit 0
+        ;;
+esac
+exit 0
+"""
+
+
 def setup_mock():
     print("Setting up mock testing environment...")
 
@@ -66,61 +289,8 @@ def setup_mock():
     os.makedirs("mock_bin", exist_ok=True)
     for tool in TOOLS:
         path = os.path.join("mock_bin", tool)
-        if tool == "seqkit":
-            with open(path, "w", newline="\n") as f:
-                f.write("""#!/bin/sh
-if [ "$1" = "stats" ]; then
-    printf "file\\tformat\\ttype\\tnum_seqs\\tsum_len\\tmin_len\\tavg_len\\tmax_len\\tQ20\\tQ30\\tN50\\tG/C\\n"
-    case "$*" in
-        *filtered_input.fastq.gz*)
-            printf "other.fastq.gz\\tFASTQ\\tDNA\\t50\\t800000000\\t200\\t500\\t1000\\t0.0\\t0.0\\t500\\t0.0\\n"
-            ;;
-        *input.fastq.gz*)
-            printf "input.fastq.gz\\tFASTQ\\tDNA\\t100\\t1000000000\\t200\\t500\\t1000\\t0.0\\t0.0\\t500\\t0.0\\n"
-            ;;
-        *)
-            printf "other.fastq.gz\\tFASTQ\\tDNA\\t50\\t800000000\\t200\\t500\\t1000\\t0.0\\t0.0\\t500\\t0.0\\n"
-            ;;
-    esac
-    exit 0
-fi
-exit 0
-""")
-        elif tool == "fastcat":
-            with open(path, "w", newline="\n") as f:
-                f.write("""#!/bin/sh
-if [ "$1" = "lint" ]; then
-    printf '@mock_zero_sdust\\nACTG\\n+\\nIIII\\n'
-    printf 'Read mock_sdust_positive masked fraction 0.99 exceeds threshold 0.00, skipping.\\n' >&2
-fi
-exit 0
-""")
-        elif tool == "minimap2":
-            with open(path, "w", newline="\n") as f:
-                f.write("""#!/bin/sh
-if [ "${1:-}" = "--version" ]; then
-    printf 'mock-minimap2 1.0\\n'
-    exit 0
-fi
-case " $* " in
-    *" -x asm5 "*)
-        query=''
-        target=''
-        for argument in "$@"; do
-            target="$query"
-            query="$argument"
-        done
-        if [ "$query" = "$target" ] && grep -q '^>contained$' "$query" 2>/dev/null \
-           && grep -q '^>target$' "$query" 2>/dev/null; then
-            printf 'contained\\t100\\t0\\t100\\t+\\ttarget\\t120\\t0\\t100\\t100\\t100\\t60\\n'
-        fi
-        ;;
-esac
-exit 0
-""")
-        else:
-            with open(path, "w", newline="\n") as f:
-                f.write("#!/bin/sh\nexit 0\n")
+        with open(path, "w", newline="\n") as f:
+            f.write(MOCK_TOOL_SCRIPT)
         try:
             st = os.stat(path)
             os.chmod(path, st.st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
@@ -194,6 +364,8 @@ def clean_mock():
         "assemblies_prepared",
         "assembly_assessment",
         "mock_contig_policy",
+        "provenance",
+        ".prokaryont_tmp",
         ".test-tmp",
     ]:
         if os.path.exists(d):
@@ -217,6 +389,9 @@ def clean_mock():
         "subsample.yaml",
         "no_keep.log",
         "keep90.log",
+        ".prokaryont_stage1.complete.tsv",
+        ".prokaryont_stage2.complete.tsv",
+        "02_filtering_metrics.tsv",
     ]
     for file in to_delete:
         if os.path.exists(file):

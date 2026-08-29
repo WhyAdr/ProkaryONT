@@ -4,6 +4,20 @@ PROKARYONT PIPELINE CHANGELOG
 Date: 2026-08-29
 Author: Codex
 
+Stage 1-2 Correctness, Identity, Atomicity, and Scientific Reporting
+-------------------------------------------------------------------
+1. Standardized Stage 1 on Fastcat 1.x, staged and validated its output contract, hardened SDUST rounded-fraction reporting, and added an exact-threshold rejection preview without modifying reads.
+2. Added complete CLI/range/boolean validation, canonical paths, input/output alias rejection, metadata-based stage signatures, opt-in SHA-256 identity, fail-closed resume, scoped `--force`, and run-specific command/provenance records.
+3. Added mutation-free strict dry-run behavior, configurable output/sample/temp paths while preserving the historical default layout, same-filesystem atomic Stage 2 publication, and strict gzip/FASTQ/nonzero validation.
+4. Replaced the weighted LRGE/Raven heuristic with independent diagnostics and a configurable 20% disagreement warning; Stage 3 now estimates from filtered reads unless the user supplies an override.
+5. Kept Stage 1 diagnostics default-on with individual skip flags, made the sequencing summary optional, made SNIKT/Filtlong tool checks truly conditional, and pinned Fastcat/Chopper to their invoked interfaces.
+6. Combined SeqKit quality/length filtering, bypassed Filtlong when ranking is disabled, used direct Chopper compressed input, and moved large intermediates under configurable output-local scratch.
+7. Replaced the arbitrary 65% read warning with stage-by-stage read, base, length, N50, probability-space Q, retention, and optional authoritative-coverage metrics; zero-read output is a hard failure.
+8. Added realistic argument-validating mocks and regression tests for dry-run immutability, manifests, resume invalidation, force regeneration, output collisions, Fastcat syntax, identity modes, and Stage 3 handoff behavior.
+
+Date: 2026-08-29
+Author: Codex
+
 Documentation Audit, Stage Environments, and Reproducible CLI Defaults
 -----------------------------------------------------------------------
 1. Added five committed per-stage Conda YAML files under `envs/`, each separating direct script checks from supporting runtime packages and labeled as audited rather than solve/install validated.

@@ -14,6 +14,9 @@ pipeline.log
 # NanoPlot outputs
 01_qc/
 02_genome_size/
+provenance/
+.prokaryont_tmp/
+.prokaryont_stage*.complete.tsv
 
 # Assembly intermediates
 assemblies/
