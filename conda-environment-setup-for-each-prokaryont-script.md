@@ -1,632 +1,347 @@
 # Conda Environment Setup for Each ProkaryONT Stage
 
-Tested, modular Conda/Mamba environment specifications for every active
-ProkaryONT stage, audited against the `require_tool` and `command -v` checks
-in the current `main` branch scripts.
+These modular Conda/Mamba specifications are **audited against current script
+checks** in the active ProkaryONT stages. They have not been claimed as solved,
+installed, or exercised on representative data. Perform and record that
+acceptance work on the target HPC system as described in
+[HPC acceptance record](#hpc-acceptance-record).
 
----
+## Environment strategy
 
-## 1. Environment Strategy
+Separate stage environments isolate the pipeline's C/C++, Rust, R, Java,
+Python, and GPU-facing toolchains. Create the committed specifications one at a
+time so that each solve and verification record remains attributable to one
+stage.
 
-### Why per-stage environments?
+### Channel configuration
 
-ProkaryONT's five stages span C/C++/Rust binaries, R graphing libraries,
-Java (Canu), Perl (NECAT, barrnap), Python 3.10+, and CUDA GPU runtimes
-(Dorado).  A single monolithic environment will hit unresolvable solver
-conflicts on most HPC systems.  Each environment below is independently
-solvable and tested.
+The YAML files commit their channel order. If configuring Conda globally as
+well, use strict channel priority:
 
-### Channel configuration (run once)
-
-```bash
+~~~bash
 conda config --add channels defaults
 conda config --add channels conda-forge
 conda config --add channels bioconda
-conda config --add channels nanoporetech   # required for fastcat
+conda config --add channels nanoporetech
 conda config --set channel_priority strict
-```
+~~~
 
-> [!IMPORTANT]
-> **`fastcat` is distributed on the `nanoporetech` channel**, not on
-> `bioconda`.  Every environment that includes `fastcat` must list
-> `nanoporetech` as a channel or the solver will fail silently.
+<code>fastcat</code> is requested from the <code>nanoporetech</code> channel
+in the Stage 1 and Stage 2 YAMLs. Use <code>mamba</code> or
+<code>micromamba</code> when available, but record the exact solver and version
+used during HPC acceptance.
 
-### Solver recommendation
+## Dependency contracts
 
-Use [`mamba`](https://mamba.readthedocs.io/) (or `micromamba`) instead of
-`conda` for all environment creation commands below.
+The following categories are deliberately separate. A package appearing in a
+YAML does not by itself make it a direct script-level contract.
 
----
+### Direct pipeline preflight checks
 
-## 2. Ground-truth dependency map
-
-The table below is derived mechanically from `require_tool` calls (hard
-failures) and `command -v` checks (soft warnings) in each script.
-
-| Tool | Binary name checked | Stage 1 | Stage 2 | Stage 3 | Stage 4 | Stage 5 | Notes |
-|---|---|:---:|:---:|:---:|:---:|:---:|---|
-| NanoPlot | `NanoPlot` | ● | ● | | | | Hard requirement in both |
-| fastcat | `fastcat` | ● | ◐ | | | | Hard in S1; conditional on `--enable-fastcat-lint` in S2 |
-| Porechop_ABI | `porechop_abi` | ● | ◐ | | | | Hard in S1; conditional on `--enable-porechopabi-trim` in S2 |
-| SNIKT | `snikt.R` | ● | ● | | | | Hard requirement (Bioconda may install as `snikt`; see symlink note in §3) |
-| LRGE | `lrge` | ● | | | | | |
-| Raven | `raven` | ● | | | | | |
-| Meryl | `meryl` | ● | | | | | |
-| Filtlong | `filtlong` | | ● | | | | |
-| SeqKit | `seqkit` | | ● | ● | | | Hard in S2 and S3 |
-| Fastplong | `fastplong` | | ● | | | | |
-| Chopper | `chopper` | | ◐ | | | | Conditional on `--enable-chopper-trim` |
-| Autocycler | `autocycler` | | | ● | | | |
-| GNU Parallel | `parallel` | | | ● | | | |
-| minimap2 | `minimap2` | | | ● | | | Also needed for iLesta & Miniasm helpers |
-| samtools | `samtools` | | | ● | ● | | |
-| Rasusa | `rasusa` | | | ◐ | | | Conditional on `--subsampler rasusa` |
-| Plassembler | `plassembler` | | | ◐ | | | Conditional unless `--skip-plsdb-screen` |
-| nucmer | `nucmer` | | | ◦ | | | Soft; needed for dotplots |
-| mummerplot | `mummerplot` | | | ◦ | | | Soft; needs gnuplot at runtime |
-| Dorado | `dorado` | | | | ● | | Not conda; see §6 |
-| Dnaapler | `dnaapler` | | | | ● | | |
-| GTDB-Tk | `gtdbtk` | | | | | ● | |
-| MLST | `mlst` | | | | | ◦ | Soft; skipped if missing |
-| Barrnap | `barrnap` | | | | | ◦ | Soft; skipped if missing |
-| pigz | `pigz` | ○ | ○ | ○ | ○ | | Falls back to gzip if missing |
-
-**Legend:** ● hard requirement  ◐ conditional hard  ◦ soft/optional  ○ implicit via `get_gzip_cmd`
-
-### Per-assembler tool dependencies (Stage 3 only)
-
-These are checked with `command -v` warnings, not hard failures.
-Install only the ones matching your `--assemblers` list.
-
-| Assembler | Binary(ies) checked | Bioconda package | Notes |
+| Stage | Unconditional hard checks | Conditional hard checks | Soft or optional checks |
 |---|---|---|---|
-| flye | `flye` | `flye` | |
-| canu | `canu` | `canu` | Java (`openjdk>=11`) required at runtime |
-| hifiasm | `hifiasm` | `hifiasm` | |
-| raven | `raven` | `raven-assembler` | |
-| miniasm | `miniasm`, `minipolish`, `minimap2`, `racon` | `miniasm`, `minipolish`, `racon` | |
-| metamdbg | `metaMDBG` | `metamdbg` | Note: lowercase conda package, uppercase binary |
-| myloasm | `myloasm` | `myloasm` | |
-| lja | `lja` | `lja` | |
-| redbean (wtdbg2) | `wtdbg2` | `wtdbg` | `wtdbg2` is the binary; `wtdbg` is the conda package |
-| necat | `necat` | `necat` | Perl-based; version `0.0.1_update20200803` on bioconda |
-| nextdenovo | `nextdenovo` | `nextdenovo` | Bioconda installs `nextDenovo` (capital D); see symlink note in §5 |
-| plassembler | `plassembler` | `plassembler` | Also an assembler helper, separate from PLSDB screen |
-| ilesta | `Ilesta`, `minipolish`, `minimap2`, `racon` | **not on bioconda** | See iLesta note below |
+| 1 | <code>NanoPlot</code>, <code>lrge</code>, <code>raven</code>, <code>meryl</code>, <code>fastcat</code>, <code>porechop_abi</code>, <code>snikt.R</code> | - | <code>pigz</code> is used when present; otherwise <code>gzip</code> |
+| 2 | <code>filtlong</code>, <code>seqkit</code>, <code>NanoPlot</code>, <code>snikt.R</code>, <code>fastplong</code> | <code>porechop_abi</code>, <code>chopper</code>, and <code>fastcat</code> when their modes are enabled | <code>pigz</code> is used when present; otherwise <code>gzip</code> |
+| 3 | <code>autocycler</code>, <code>parallel</code>, <code>seqkit</code>, <code>minimap2</code>, <code>samtools</code>, <code>python3</code> | <code>rasusa</code> for Rasusa subsampling; <code>plassembler</code> unless the PLSDB screen is skipped | <code>nucmer</code> and <code>mummerplot</code> enable optional dotplots; <code>pigz</code> is optional |
+| 4 | <code>dorado</code>, <code>samtools</code>, <code>dnaapler</code> | - | <code>pigz</code> is optional |
+| 5 | <code>gtdbtk</code> | - | <code>mlst</code> and <code>barrnap</code> are skipped when absent |
 
-> [!WARNING]
-> **iLesta is not available as a bioconda package.** Install it manually from
-> source (GitHub) and ensure the `Ilesta` binary is on `$PATH`.  Its
-> additional dependencies (`minipolish`, `minimap2`, `racon`) are available
-> on bioconda and should be installed in the Stage 3 environment.
+### Stage 3 selected-backend checks
 
----
+Stage 3 applies three distinct layers for every requested assembler:
 
-## 3. Stage 1 — QC & Genome Size Estimation
+1. <code>autocycler helper ASSEMBLER --help</code> is a hard compatibility
+   gate. A selected helper task missing from the installed Autocycler release
+   aborts the stage before assembly.
+2. Backend executables are checked with <code>command -v</code>. Missing
+   executables produce preflight warnings, not immediate hard failures.
+3. A missing or broken backend then causes its GNU Parallel assembler job to
+   fail when that job is executed.
 
-**Script:** [`01_qc_estimate.sh`](file:///d:/W/ProkaryONT/01_qc_estimate.sh)
+The script default is the installable five-assembler ensemble
+<code>flye,canu,hifiasm,miniasm,myloasm</code>. The complete canonical helper
+catalog remains selectable explicitly:
 
-### `env_stage1_qc.yml`
+| Helper task | Backend executable checks | Package/install note |
+|---|---|---|
+| <code>flye</code> | <code>flye</code> | <code>flye</code> |
+| <code>canu</code> | <code>canu</code> | <code>canu</code>; Java runtime required |
+| <code>hifiasm</code> | <code>hifiasm</code> | <code>hifiasm</code> |
+| <code>miniasm</code> | <code>miniasm</code>, <code>minipolish</code>, <code>minimap2</code>, <code>racon</code> | corresponding Bioconda packages |
+| <code>myloasm</code> | <code>myloasm</code> | <code>myloasm</code> |
+| <code>ilesta</code> | <code>Ilesta</code>, <code>minipolish</code>, <code>minimap2</code>, <code>racon</code> | install iLesta manually |
+| <code>lja</code> | <code>lja</code> | <code>lja</code> |
+| <code>raven</code> | <code>raven</code> | <code>raven-assembler</code> |
+| <code>metamdbg</code> | <code>metaMDBG</code> | <code>metamdbg</code> |
+| <code>plassembler</code> | <code>plassembler</code> | also used by the PLSDB screen |
+| <code>nextdenovo</code> | <code>nextdenovo</code> | package may expose <code>nextDenovo</code>; see Stage 3 note |
+| <code>redbean</code> | <code>wtdbg2</code> | <code>wtdbg</code>; <code>wtdbg2</code> is accepted as an input alias and normalized to <code>redbean</code> |
+| <code>necat</code> | <code>necat</code> | <code>necat</code> |
 
-```yaml
-name: prokaryont-stage1-qc
-channels:
-  - conda-forge
-  - bioconda
-  - nanoporetech          # required for fastcat
-  - defaults
-dependencies:
-  - python>=3.10,<3.12
-  - pigz
-  # --- QC & diagnostics ---
-  - nanoplot>=1.42.0
-  - fastcat>=0.18.0       # from nanoporetech channel
-  - porechop_abi>=0.5.0
-  - snikt                 # pulls in R, seqtk, and R libraries automatically
-  # --- Genome size estimation ---
-  - lrge>=0.1.0
-  - raven-assembler>=1.8.3
-  - meryl>=1.4.1
-```
+### Supporting package and runtime dependencies
 
-> [!IMPORTANT]
-> **`snikt.R` Binary Name Compatibility**: `01_qc_estimate.sh` checks for
-> `snikt.R` via `require_tool snikt.R`.  Bioconda packages sometimes install the
-> binary entrypoint as `snikt` instead of `snikt.R`.  If `command -v snikt.R`
-> fails after activating your environment, create a symlink in your conda `bin/`:
-> ```bash
-> [[ ! -f "${CONDA_PREFIX}/bin/snikt.R" && -f "${CONDA_PREFIX}/bin/snikt" ]] && \
->   ln -s "${CONDA_PREFIX}/bin/snikt" "${CONDA_PREFIX}/bin/snikt.R"
-> ```
+The YAMLs also declare selected supporting dependencies that are not checked
+directly by the stage scripts:
 
-> [!NOTE]
-> The bioconda `snikt` package automatically resolves its R dependencies
-> (`r-tidyverse`, `r-gridextra`, `r-docopt`, `r-lubridate`) and the
-> system tool `seqtk`.  Do not manually list individual R packages unless
-> you are installing SNIKT from source.
+- Python runtimes and <code>pigz</code> for Stages 1-4.
+- <code>openjdk</code> for Canu.
+- <code>gnuplot</code> for <code>mummerplot</code>.
+- <code>blast</code> and <code>pyrodigal</code> for Dnaapler.
+- <code>hmmer</code>, <code>prodigal</code>, <code>fastani</code>,
+  <code>mash</code>, and <code>pplacer</code> for the GTDB-Tk runtime.
 
-> [!NOTE]
-> Stage 1 does **not** use `seqkit`, `filtlong`, or `chopper`.  Stage 1 only
-> requires `NanoPlot`, `fastcat`, `porechop_abi`, `snikt.R`, `lrge`, `raven`, and `meryl`.
+### External databases and assets
 
-### Verification
+Conda environments do not provide the raw reads, POD5 input, Dorado models,
+Plassembler database, or GTDB-Tk reference data. Record those assets and their
+versions separately from the environment solve.
 
-```bash
-mamba env create -f env_stage1_qc.yml
+## Stage 1 - QC and genome-size estimation
+
+**Script:** [<code>01_qc_estimate.sh</code>](01_qc_estimate.sh)
+
+**Environment:** [<code>envs/env_stage1_qc.yml</code>](envs/env_stage1_qc.yml)
+
+~~~bash
+mamba env create -f envs/env_stage1_qc.yml
 conda activate prokaryont-stage1-qc
+~~~
 
-# Ensure snikt.R is available as an executable name
+Stage 1 checks for <code>snikt.R</code>. If the installed recipe exposes only
+<code>snikt</code>, create the compatibility symlink after inspecting both
+paths:
+
+~~~bash
 [[ ! -f "${CONDA_PREFIX}/bin/snikt.R" && -f "${CONDA_PREFIX}/bin/snikt" ]] && \
   ln -s "${CONDA_PREFIX}/bin/snikt" "${CONDA_PREFIX}/bin/snikt.R"
+~~~
 
-NanoPlot --version
-fastcat --version
-porechop_abi --version
-snikt.R --help 2>&1 | head -1
-lrge --help 2>&1 | head -1
-raven --version
-meryl --version
+Static command check:
 
-bash 01_qc_estimate.sh --help
-```
+~~~bash
+bash 01_qc_estimate.sh -h
+~~~
 
----
+## Stage 2 - preprocessing and filtering
 
-## 4. Stage 2 — Preprocessing & Filtering
+**Script:** [<code>02_preprocess_filter.sh</code>](02_preprocess_filter.sh)
 
-**Script:** [`02_preprocess_filter.sh`](file:///d:/W/ProkaryONT/02_preprocess_filter.sh)
+**Environment:** [<code>envs/env_stage2_preproc.yml</code>](envs/env_stage2_preproc.yml)
 
-Stages 1 and 2 share significant overlap (`NanoPlot`, `porechop_abi`,
-`snikt.R`, `fastcat`) and can be merged into one environment if preferred.
-
-### `env_stage2_preproc.yml`
-
-```yaml
-name: prokaryont-stage2-preproc
-channels:
-  - conda-forge
-  - bioconda
-  - nanoporetech          # required for fastcat
-  - defaults
-dependencies:
-  - python>=3.10,<3.12
-  - pigz
-  # --- Always required ---
-  - filtlong>=0.2.1
-  - seqkit>=2.8.0
-  - nanoplot>=1.42.0
-  - snikt                 # unconditional require_tool in script
-  - fastplong>=0.2.2
-  # --- Conditional (install all; cheaper than debugging) ---
-  - porechop_abi>=0.5.0   # required when --enable-porechopabi-trim
-  - chopper>=0.7.0        # required when --enable-chopper-trim
-  - fastcat>=0.18.0       # required when --enable-fastcat-lint
-```
-
-> [!TIP]
-> Even though `porechop_abi`, `chopper`, and `fastcat` are conditional on
-> opt-in CLI flags, install all three.  The `require_tool` check runs at
-> script startup *after* flag parsing, so missing any enabled tool causes
-> an immediate abort with no partial output.
-
-### Verification
-
-```bash
-mamba env create -f env_stage2_preproc.yml
+~~~bash
+mamba env create -f envs/env_stage2_preproc.yml
 conda activate prokaryont-stage2-preproc
+~~~
 
-# Ensure snikt.R is available as an executable name
-[[ ! -f "${CONDA_PREFIX}/bin/snikt.R" && -f "${CONDA_PREFIX}/bin/snikt" ]] && \
-  ln -s "${CONDA_PREFIX}/bin/snikt" "${CONDA_PREFIX}/bin/snikt.R"
+Apply the same inspected <code>snikt.R</code> compatibility symlink if needed.
+The YAML includes all three conditional tools so the corresponding opt-in modes
+can be enabled without changing environments.
 
-filtlong --version
-seqkit version
-chopper --version
-fastplong --version
-NanoPlot --version
-snikt.R --help 2>&1 | head -1
+Static command check:
 
-bash 02_preprocess_filter.sh --help
-```
+~~~bash
+bash 02_preprocess_filter.sh -h
+~~~
 
----
+## Stage 3 - multi-assembler Autocycler workflow
 
-## 5. Stage 3 — Multi-Assembler & Autocycler
+**Script:** [<code>03_autocycler_assemble.sh</code>](03_autocycler_assemble.sh)
 
-**Script:** [`03_autocycler_assemble.sh`](file:///d:/W/ProkaryONT/03_autocycler_assemble.sh)
+**Environment:** [<code>envs/env_stage3_assemble.yml</code>](envs/env_stage3_assemble.yml)
 
-This is the largest environment.  The assembler list is user-selectable
-via `--assemblers`, so only install what you intend to run.  The
-**core workflow utilities** are always required.
-
-### `env_stage3_assemble.yml`
-
-```yaml
-name: prokaryont-stage3-assemble
-channels:
-  - conda-forge
-  - bioconda
-  - defaults
-dependencies:
-  - python>=3.10,<3.12
-  - pigz
-  # --- Core workflow (always required) ---
-  - autocycler>=0.5.0
-  - parallel>=20230122
-  - seqkit>=2.8.0
-  - minimap2>=2.28
-  - samtools>=1.19
-  # --- Subsampling (install both; rasusa is small) ---
-  - rasusa>=0.8.0
-  # --- PLSDB characterization ---
-  - plassembler>=1.6.0
-  # --- Dotplot utilities (optional, soft-checked) ---
-  - mummer4>=4.0.0rc1
-  - gnuplot                # runtime dep of mummerplot
-  # --- Runtime for Java-based tools (Canu) ---
-  - openjdk>=11            # prevents JVM crashes during Canu overlap/gatekeeper jobs
-  # --- Helper assemblers (install only what you use) ---
-  - flye>=2.9.3
-  - canu>=2.2
-  - hifiasm>=0.19.8
-  - raven-assembler>=1.8.3
-  - miniasm>=0.3_r179
-  - minipolish>=0.1.3
-  - racon>=1.5.0
-  - metamdbg>=1.1
-  - myloasm>=0.1.0
-  - lja>=0.2
-  - wtdbg>=2.5
-  - necat>=0.0.1
-  - nextdenovo>=2.5.2
-  # NOTE: iLesta (Ilesta binary) is not on bioconda.
-  # Install from source and ensure Ilesta is on $PATH.
-  # Its deps (minipolish, minimap2, racon) are listed above.
-```
-
-> [!IMPORTANT]
-> **`nextdenovo` Case Sensitivity on Linux**: Bioconda packages install the
-> binary as `nextDenovo` (with a capital `D`).  Stage 3's pre-flight loop checks
-> `command -v nextdenovo`.  On case-sensitive Linux filesystems, create a symlink:
-> ```bash
-> [[ ! -f "${CONDA_PREFIX}/bin/nextdenovo" && -f "${CONDA_PREFIX}/bin/nextDenovo" ]] && \
->   ln -s "${CONDA_PREFIX}/bin/nextDenovo" "${CONDA_PREFIX}/bin/nextdenovo"
-> ```
-
-> [!IMPORTANT]
-> **Plassembler PLSDB database** must be downloaded separately.  The
-> script's database search order is:
-> 1. `--plassembler-db` CLI argument
-> 2. `plassembler_db` in `pipeline.conf`
-> 3. `$PLASSEMBLER_DB` environment variable
-> 4. `$CONDA_PREFIX/plassembler_db` directory
->
-> ```bash
-> conda activate prokaryont-stage3-assemble
-> plassembler download -d /databases/plassembler_db
-> export PLASSEMBLER_DB=/databases/plassembler_db
-> ```
-
-> [!NOTE]
-> `edlib` is statically linked into the Autocycler binary and does not
-> need to be installed separately via conda.
-
-### Solver tips for large environments
-
-If the solver cannot resolve all assemblers simultaneously:
-
-```bash
-# Option A: Split assemblers into a separate overlay environment
-mamba create -n prokaryont-s3-core \
-  -c conda-forge -c bioconda \
-  autocycler parallel seqkit minimap2 samtools rasusa plassembler mummer4 gnuplot openjdk=11
-
-mamba create -n prokaryont-s3-assemblers \
-  -c conda-forge -c bioconda \
-  flye canu hifiasm raven-assembler miniasm minipolish racon \
-  metamdbg myloasm lja wtdbg necat nextdenovo
-
-# Option B: Use --assemblers to limit the set and install only what you need
-```
-
-### Verification
-
-```bash
-mamba env create -f env_stage3_assemble.yml
+~~~bash
+mamba env create -f envs/env_stage3_assemble.yml
 conda activate prokaryont-stage3-assemble
+~~~
 
-# Create nextdenovo lowercase symlink if needed
+The committed YAML installs the core workflow, conditional Rasusa and
+Plassembler modes, optional MUMmer dotplots, and the default assembler set:
+
+~~~text
+flye,canu,hifiasm,miniasm,myloasm
+~~~
+
+Install only the extra backends needed for a non-default
+<code>--assemblers</code> selection. For example:
+
+~~~bash
+mamba install -n prokaryont-stage3-assemble \
+  -c conda-forge -c bioconda \
+  raven-assembler metamdbg lja wtdbg necat nextdenovo
+~~~
+
+iLesta is not included in the YAML; install it separately and confirm that
+<code>Ilesta</code>, <code>minipolish</code>, <code>minimap2</code>, and
+<code>racon</code> are all on <code>PATH</code>.
+
+If a NextDenovo installation exposes only <code>nextDenovo</code>, create a
+lowercase compatibility symlink after inspecting both paths:
+
+~~~bash
 [[ ! -f "${CONDA_PREFIX}/bin/nextdenovo" && -f "${CONDA_PREFIX}/bin/nextDenovo" ]] && \
   ln -s "${CONDA_PREFIX}/bin/nextDenovo" "${CONDA_PREFIX}/bin/nextdenovo"
+~~~
 
-autocycler --version
-parallel --version | head -1
-seqkit version
-minimap2 --version
-samtools --version | head -1
-rasusa --version
-plassembler --version
-java -version 2>&1 | head -1
+Download the Plassembler database separately:
 
-# Verify selected assemblers
-for asm in flye canu hifiasm raven miniasm wtdbg2 necat nextdenovo; do
-  command -v "$asm" && echo "  $asm: OK" || echo "  $asm: MISSING"
-done
+~~~bash
+plassembler download -d /databases/plassembler_db
+export PLASSEMBLER_DB=/databases/plassembler_db
+~~~
 
-bash 03_autocycler_assemble.sh --help
-```
+Stage 3 resolves the database in this order: <code>--plassembler-db</code>,
+<code>plassembler_db</code> in <code>pipeline.conf</code>,
+<code>PLASSEMBLER_DB</code>, then
+<code>$CONDA_PREFIX/plassembler_db</code>.
 
----
+Static command check:
 
-## 6. Stage 4 — Dorado Polishing & Dnaapler
+~~~bash
+bash 03_autocycler_assemble.sh -h
+~~~
 
-**Script:** [`04_polish_orient.sh`](file:///d:/W/ProkaryONT/04_polish_orient.sh)
+## Stage 4 - Dorado polishing and Dnaapler orientation
 
-### Dorado: Install from ONT releases, not conda
+**Script:** [<code>04_polish_orient.sh</code>](04_polish_orient.sh)
 
-Dorado bundles its own CUDA runtime and cuDNN libraries.  Installing it
-from conda will almost certainly break GPU compatibility with your HPC
-driver stack.  Always use the official standalone binary:
+**Environment:** [<code>envs/env_stage4_polish.yml</code>](envs/env_stage4_polish.yml)
 
-```bash
-# 1. Download (check https://github.com/nanoporetech/dorado/releases for latest)
-wget https://cdn.oxfordnanoportal.com/software/analysis/dorado-<VERSION>-linux-x64.tar.gz
-tar -xzf dorado-<VERSION>-linux-x64.tar.gz
-export PATH="$(pwd)/dorado-<VERSION>-linux-x64/bin:$PATH"
-
-# 2. Download basecalling models
-dorado download --model sup
-# Or a specific chemistry model:
-# dorado download --model dna_r10.4.1_e8.2_400bps_sup@v5.0.0
-
-# 3. Verify GPU access
-nvidia-smi
-dorado basecaller --help
-dorado polish --help
-```
-
-### `env_stage4_polish.yml`
-
-```yaml
-name: prokaryont-stage4-polish
-channels:
-  - conda-forge
-  - bioconda
-  - defaults
-dependencies:
-  - python>=3.10,<3.12
-  - samtools>=1.19
-  - pigz
-  - dnaapler>=0.7.0
-  # Dnaapler runtime dependencies:
-  - blast>=2.14.0         # needed by dnaapler for start-gene identification
-  - pyrodigal>=3.0        # needed by dnaapler for gene prediction
-```
-
-> [!WARNING]
-> Dorado is **not** listed in the YAML.  It must be available on `$PATH`
-> from the standalone install above.  The script's `require_tool dorado`
-> check will fail immediately if it is missing.
-
-### Verification
-
-```bash
-mamba env create -f env_stage4_polish.yml
+~~~bash
+mamba env create -f envs/env_stage4_polish.yml
 conda activate prokaryont-stage4-polish
+~~~
 
-dorado --version          # from standalone install
-samtools --version | head -1
-dnaapler --version
+Dorado is a direct hard requirement but is intentionally absent from the YAML.
+Install an official standalone Dorado build that matches the target HPC
+architecture and GPU driver, add it to <code>PATH</code>, and install the
+required basecalling model.
 
-bash 04_polish_orient.sh --help
-```
+For a BAM with multiple read groups, use the non-interactive
+<code>--read-group ID</code> option. The script validates the exact ID against
+the aligned BAM header and passes <code>--RG ID</code> to both polish passes:
 
----
+~~~bash
+bash 04_polish_orient.sh \
+  --assembly autocycler_out/consensus_assembly.fasta \
+  --pod5-dir pod5_dir/ \
+  --read-group sample_rg \
+  --double-polish
+~~~
 
-## 7. Stage 5 — Taxonomy Classification
+Static command check:
 
-**Script:** [`05_taxonomy.sh`](file:///d:/W/ProkaryONT/05_taxonomy.sh)
+~~~bash
+bash 04_polish_orient.sh -h
+~~~
 
-### `env_stage5_taxonomy.yml`
+## Stage 5 - taxonomy classification
 
-```yaml
-name: prokaryont-stage5-taxonomy
-channels:
-  - conda-forge
-  - bioconda
-  - defaults
-dependencies:
-  # GTDB-Tk pins its own Python version; let the solver decide
-  - gtdbtk>=2.3.2
-  # Optional but recommended (script skips gracefully if missing)
-  - mlst>=2.23.0
-  - barrnap>=0.9
-  # GTDB-Tk transitive dependencies (usually pulled automatically):
-  - hmmer>=3.3.2
-  - prodigal>=2.6.3
-  - fastani>=1.33
-  - mash>=2.3
-  - pplacer
-```
+**Script:** [<code>05_taxonomy.sh</code>](05_taxonomy.sh)
 
-> [!IMPORTANT]
-> **GTDB-Tk reference database** (~85 GB decompressed) must be downloaded
-> separately:
-> ```bash
-> conda activate prokaryont-stage5-taxonomy
->
-> # Use the bundled download helper:
-> download-db.sh /databases/gtdbtk_r220
->
-> # Point the pipeline to it (set in pipeline.conf or shell profile):
-> export GTDBTK_DATA_PATH=/databases/gtdbtk_r220
-> ```
+**Environment:** [<code>envs/env_stage5_taxonomy.yml</code>](envs/env_stage5_taxonomy.yml)
 
-> [!TIP]
-> GTDB-Tk v2.3+ requires Python ≤3.10 due to `pplacer` constraints.
-> Do not force `python>=3.11` in this environment.
-
-### Verification
-
-```bash
-mamba env create -f env_stage5_taxonomy.yml
+~~~bash
+mamba env create -f envs/env_stage5_taxonomy.yml
 conda activate prokaryont-stage5-taxonomy
+~~~
 
-gtdbtk --version
-mlst --version
-barrnap --version
+The YAML lets GTDB-Tk constrain its compatible Python runtime. Download the
+GTDB-Tk reference database separately and record its release:
 
-bash 05_taxonomy.sh --help
-```
+~~~bash
+download-db.sh /databases/gtdbtk
+export GTDBTK_DATA_PATH=/databases/gtdbtk
+~~~
 
----
+Static command check:
 
-## 8. Combined Quick-Setup Script
+~~~bash
+bash 05_taxonomy.sh -h
+~~~
 
-Save as `setup_all_envs.sh` and run on your HPC login node:
+## Sequential environment creation
 
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
+Run these commands one by one and stop to review each solve:
 
-command -v mamba &>/dev/null && PM="mamba" || PM="conda"
-echo "Using: ${PM}"
+~~~bash
+mamba env create -f envs/env_stage1_qc.yml
+mamba env create -f envs/env_stage2_preproc.yml
+mamba env create -f envs/env_stage3_assemble.yml
+mamba env create -f envs/env_stage4_polish.yml
+mamba env create -f envs/env_stage5_taxonomy.yml
+~~~
 
-# --- Stage 1: QC & Genome Size ---
-${PM} create -y -n prokaryont-stage1-qc \
-  -c conda-forge -c bioconda -c nanoporetech \
-  python=3.10 pigz nanoplot fastcat porechop_abi snikt lrge raven-assembler meryl
+Do not describe the environments as tested merely because the YAML parses or
+solves. A representative-data run is a separate validation level.
 
-# Post-install symlink for snikt.R in Stage 1
-_s1_prefix="$(conda info --base)/envs/prokaryont-stage1-qc"
-[[ -f "${_s1_prefix}/bin/snikt" && ! -f "${_s1_prefix}/bin/snikt.R" ]] && \
-  ln -s "${_s1_prefix}/bin/snikt" "${_s1_prefix}/bin/snikt.R"
+## HPC acceptance record
 
-# --- Stage 2: Preprocess & Filter ---
-${PM} create -y -n prokaryont-stage2-preproc \
-  -c conda-forge -c bioconda -c nanoporetech \
-  python=3.10 pigz filtlong seqkit nanoplot snikt fastplong \
-  porechop_abi chopper fastcat
+For every completed solve/install validation, record:
 
-# Post-install symlink for snikt.R in Stage 2
-_s2_prefix="$(conda info --base)/envs/prokaryont-stage2-preproc"
-[[ -f "${_s2_prefix}/bin/snikt" && ! -f "${_s2_prefix}/bin/snikt.R" ]] && \
-  ln -s "${_s2_prefix}/bin/snikt" "${_s2_prefix}/bin/snikt.R"
+1. OS, architecture, and exact Conda/Mamba version.
+2. Solve date, strict-priority setting, and effective channel order.
+3. An exact environment export or lockfile committed or archived with the run.
+4. Tool versions actually verified.
+5. Whether each stage was only checked with <code>-h/--help</code> or exercised
+   on representative data.
 
-# --- Stage 3: Autocycler Assembly ---
-# Core utilities + Java + Assemblers:
-${PM} create -y -n prokaryont-stage3-assemble \
-  -c conda-forge -c bioconda \
-  python=3.10 pigz autocycler parallel seqkit minimap2 samtools \
-  rasusa plassembler mummer4 gnuplot openjdk=11 \
-  flye canu hifiasm raven-assembler miniasm minipolish racon \
-  metamdbg myloasm lja wtdbg necat nextdenovo
+A compact record can use this structure:
 
-# Post-install symlink for nextdenovo lowercase alias
-_s3_prefix="$(conda info --base)/envs/prokaryont-stage3-assemble"
-[[ -f "${_s3_prefix}/bin/nextDenovo" && ! -f "${_s3_prefix}/bin/nextdenovo" ]] && \
-  ln -s "${_s3_prefix}/bin/nextDenovo" "${_s3_prefix}/bin/nextdenovo"
+~~~text
+Stage:
+OS/architecture:
+Conda/Mamba version:
+Solve date:
+Channel order and priority:
+Export or lockfile:
+Verified tool versions:
+Validation level: --help only | representative data
+Dataset/run reference:
+~~~
 
-# --- Stage 4: Polish & Orient ---
-# NOTE: Dorado must be installed separately from ONT releases.
-${PM} create -y -n prokaryont-stage4-polish \
-  -c conda-forge -c bioconda \
-  python=3.10 samtools pigz dnaapler blast pyrodigal
+## Slurm invocation examples
 
-# --- Stage 5: Taxonomy ---
-${PM} create -y -n prokaryont-stage5-taxonomy \
-  -c conda-forge -c bioconda \
-  gtdbtk mlst barrnap hmmer prodigal fastani mash pplacer
+Stage 3 with the committed default ensemble:
 
-echo "=== All environments created ==="
-echo ""
-echo "Remaining manual steps:"
-echo "  1. Install Dorado from https://github.com/nanoporetech/dorado/releases"
-echo "  2. Install iLesta from source if using --assemblers ilesta"
-echo "  3. Download Plassembler PLSDB:  plassembler download -d /path/to/db"
-echo "  4. Download GTDB-Tk database:   download-db.sh /path/to/gtdbtk_db"
-```
-
----
-
-## 9. HPC / Slurm Integration
-
-### Stage 3 example (compute node)
-
-```bash
+~~~bash
 #!/bin/bash
 #SBATCH --job-name=prokaryont_s3
-#SBATCH --nodes=1
 #SBATCH --cpus-per-task=64
 #SBATCH --mem=256G
 #SBATCH --time=24:00:00
-#SBATCH --partition=compute
 
 source ~/.bashrc
 conda activate prokaryont-stage3-assemble
-
 export PLASSEMBLER_DB=/databases/plassembler_db
 
 bash 03_autocycler_assemble.sh \
   --config pipeline.conf \
   --reads filtered_input.fastq.gz \
-  --read-type ont_r10 \
   --threads "${SLURM_CPUS_PER_TASK}" \
-  --assemblers flye,canu,hifiasm,raven,miniasm,lja,redbean \
+  --skip-curation \
   --plassembler-db "${PLASSEMBLER_DB}"
-```
+~~~
 
-### Stage 4 example (GPU node)
+Stage 4 with a reproducible read-group selection:
 
-```bash
+~~~bash
 #!/bin/bash
 #SBATCH --job-name=prokaryont_s4
-#SBATCH --nodes=1
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=128G
 #SBATCH --gres=gpu:1
 #SBATCH --time=8:00:00
-#SBATCH --partition=gpu
 
 source ~/.bashrc
 conda activate prokaryont-stage4-polish
-
-# Dorado from standalone install
-export PATH="/software/dorado-0.8.3-linux-x64/bin:$PATH"
+export PATH="/software/dorado/bin:$PATH"
 
 bash 04_polish_orient.sh \
   --config pipeline.conf \
   --assembly autocycler_out/consensus_assembly.fasta \
   --pod5-dir pod5_dir/ \
   --device cuda:0 \
+  --read-group sample_rg \
   --threads "${SLURM_CPUS_PER_TASK}" \
   --double-polish
-```
-
----
-
-## 10. Changelog vs. original draft
-
-This document was refined with the following corrections and hardening:
-
-| Issue | Detail |
-|---|---|
-| **Missing `nanoporetech` channel** | `fastcat` is distributed on the `nanoporetech` conda channel, not `bioconda`. All environments using `fastcat` now include `-c nanoporetech`. |
-| **Wrong SNIKT R dependencies** | The original listed `r-ggplot2`, `r-optparse`, `r-scales`, `r-gridextra`, `r-stringr`, `r-reshape2`. SNIKT actually requires `r-tidyverse`, `r-gridextra`, `r-docopt`, `r-lubridate`, plus the system tool `seqtk`. Using the bioconda `snikt` package resolves all of these automatically. |
-| **`snikt.R` binary alias compatibility** | Documented and automated the `snikt.R -> snikt` symlink check in Stages 1, 2, and the setup script to satisfy `require_tool snikt.R`. |
-| **Phantom `seqkit` in Stage 1** | `seqkit` is not used or checked anywhere in `01_qc_estimate.sh`. Removed from Stage 1. |
-| **Phantom `edlib` in Stage 3** | `edlib` is statically linked into the Autocycler binary. It is not a separate runtime dependency. Removed. |
-| **`nextdenovo` case sensitivity** | Documented that Bioconda installs `nextDenovo` (capital `D`) and added the `nextdenovo -> nextDenovo` symlink check to satisfy `03_autocycler_assemble.sh`. |
-| **Canu Java runtime (`openjdk>=11`)** | Added explicit `openjdk>=11` to Stage 3 to prevent JVM memory/runtime failures on minimal HPC compute nodes. |
-| **Missing `gnuplot`** | `mummerplot` requires `gnuplot` at runtime. Added to Stage 3. |
-| **Missing `seqtk`** | SNIKT's backend uses `seqtk`. The bioconda `snikt` package pulls it automatically, but this was not documented. |
-| **Missing `pyrodigal` in Stage 4** | Dnaapler uses `pyrodigal` for gene prediction. Added alongside `blast`. |
-| **Missing `pplacer` in Stage 5** | GTDB-Tk requires `pplacer`. Added. |
-| **iLesta availability** | Documented as a bioconda package, but it does not exist there. Added explicit warning about manual source installation. |
-| **YAML pip section with broken syntax** | The Stage 1 YAML had a `pip:` section with `ont-fastcat` listed twice and invalid YAML indentation. Removed entirely; `fastcat` is installed via the `nanoporetech` channel. |
-| **Broken git+https in Stage 3 pip** | The original listed `git+https://github.com/rrwick/Autocycler.git` under pip. Autocycler is a Rust binary available on bioconda; pip install from GitHub would fail. Removed. |
-| **`ont-fastcat` package name** | The conda package name is `fastcat`, not `ont-fastcat` (that's a legacy PyPI/pip name). Corrected throughout. |
-| **Stage 2 SNIKT as conditional** | Documented as "SNIKT re-assessment" suggesting it is optional, but `require_tool snikt.R` is unconditional in `02_preprocess_filter.sh`. Corrected to show it as a hard dependency. |
-| **Stage 5 Python version** | GTDB-Tk + pplacer constrain Python ≤ 3.10. Added tip. |
-| **No ground-truth dependency table** | Added §2 mapping every tool to the exact script check that requires it, with mandatory/conditional/optional classification. |
-| **Missing assembler binary name mapping** | Added per-assembler table showing conda package name vs. checked binary name vs. additional deps (e.g., `metamdbg` package → `metaMDBG` binary). |
+~~~

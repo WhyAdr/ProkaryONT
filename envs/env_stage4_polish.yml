@@ -1,0 +1,21 @@
+name: prokaryont-stage4-polish
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  # Supporting runtime and optional parallel gzip implementation.
+  - python>=3.10,<3.12
+  - pigz
+
+  # Direct Conda-installable Stage 4 preflight requirements.
+  - samtools>=1.19
+  - dnaapler>=0.7.0
+
+  # Explicit Dnaapler runtime dependencies.
+  - blast>=2.14.0
+  - pyrodigal>=3.0
+
+# Dorado is a direct Stage 4 requirement but is intentionally not installed by
+# this file. Use the official standalone build described in the environment
+# guide so it can match the target HPC GPU driver stack.

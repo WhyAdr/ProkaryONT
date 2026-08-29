@@ -6,7 +6,7 @@ This document outlines how to safely test and dry-run the ProkaryONT assembly pi
 
 ## 🛠️ The Testing Utility: `generate_mock_environment.py`
 
-Located at [generate_mock_environment.py](file:///d:/W/ProkaryONT/utils/generate_mock_environment.py), this Python script automates the creation and cleanup of test fixtures, including fake executable binaries (which return exit code `0`) and valid gzipped sequence structures.
+Located at [generate_mock_environment.py](utils/generate_mock_environment.py), this Python script automates the creation and cleanup of test fixtures, including fake executable binaries (which return exit code `0`) and valid gzipped sequence structures.
 
 ### 1. Setup the Mock Environment
 Before testing, run the python script from the root of the repository to generate all necessary directories, mock files, and executables:
@@ -40,7 +40,7 @@ bash 03_autocycler_assemble.sh \
   --reads input.fastq.gz \
   --read-type ont_r10 \
   --genome-size 5000000 \
-  --assemblers lja,ilesta \
+  --assemblers flye,miniasm,myloasm \
   --subsample-count 2 \
   --compress-threads 100 \
   --combine-threads 100 \
@@ -50,6 +50,7 @@ bash 04_polish_orient.sh \
   --assembly autocycler_out/consensus_assembly.fasta \
   --pod5-dir pod5_dir/ \
   --device cuda:1 \
+  --read-group sample_rg \
   --double-polish \
   --skip-curation \
   --dry-run
@@ -59,6 +60,11 @@ The Stage 3 dry-run must show both `autocycler compress` and `autocycler
 cluster` with the same `--max_contigs` placeholder. Because dry-run mode does
 not count real assembler FASTAs, it deliberately labels the effective value
 `DRY_RUN_UNAVAILABLE`.
+
+The Stage 4 dry-run must show two `dorado polish` commands containing
+`--RG sample_rg` when `--double-polish` and `--read-group sample_rg` are used.
+Header membership is validated only in a real run after each BAM is created;
+dry-run checks validate the generated command contract.
 
 ### 3. Run deterministic contig-policy tests
 
@@ -70,8 +76,10 @@ PAF deletion, and fingerprint reuse:
 ```bash
 python3 -m unittest discover -s tests -v
 python3 -m py_compile dedup_contained.py tests/test_dedup_contained.py \
-  tests/test_stage3_contig_policy.py utils/generate_mock_environment.py
-bash -n 03_autocycler_assemble.sh
+  tests/test_stage3_contig_policy.py tests/test_documentation_cli_contracts.py \
+  utils/generate_mock_environment.py
+bash -n 01_qc_estimate.sh 02_preprocess_filter.sh \
+  03_autocycler_assemble.sh 04_polish_orient.sh 05_taxonomy.sh
 ```
 
 `utils/generate_mock_environment.py` also creates
@@ -113,5 +121,5 @@ claimed exact masked-base counts.
 
 To prevent local test junk from polluting the remote repository:
 1.  **Never stage mock binaries**: The `mock_bin/` directory is for local dry-run testing only.
-2.  **Ignored extensions**: The [.gitignore](file:///d:/W/ProkaryONT/.gitignore) configuration is set up to automatically block intermediate file types (like `*.log`, `*.bam`, `*.fastq.gz`, `*.fasta`, and directories like `autocycler_out/`, `assemblies/`, and `01_qc/`).
+2.  **Ignored extensions**: The [.gitignore](.gitignore) configuration is set up to automatically block intermediate file types (like `*.log`, `*.bam`, `*.fastq.gz`, `*.fasta`, and directories like `autocycler_out/`, `assemblies/`, and `01_qc/`).
 3.  **Untracked clean files**: Always verify `git status` before committing to confirm that only core script updates are staged.

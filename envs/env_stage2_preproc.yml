@@ -1,0 +1,25 @@
+name: prokaryont-stage2-preproc
+channels:
+  - conda-forge
+  - bioconda
+  - nanoporetech
+  - defaults
+dependencies:
+  # Supporting runtime and optional parallel gzip implementation.
+  - python>=3.10,<3.12
+  - pigz
+
+  # Direct unconditional Stage 2 preflight requirements.
+  - filtlong>=0.2.1
+  - seqkit>=2.8.0
+  - nanoplot>=1.42.0
+  - snikt
+  - fastplong>=0.2.2
+
+  # Direct conditional requirements for opt-in trimming/lint modes.
+  - porechop_abi>=0.5.0
+  - chopper>=0.7.0
+  - fastcat>=0.18.0
+
+# Stage 2 checks for the executable name `snikt.R`. If this package exposes
+# only `snikt`, follow the compatibility-symlink step in the environment guide.

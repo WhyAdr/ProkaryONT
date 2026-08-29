@@ -1,6 +1,18 @@
 PROKARYONT PIPELINE CHANGELOG
 =============================
 
+Date: 2026-08-29
+Author: Codex
+
+Documentation Audit, Stage Environments, and Reproducible CLI Defaults
+-----------------------------------------------------------------------
+1. Added five committed per-stage Conda YAML files under `envs/`, each separating direct script checks from supporting runtime packages and labeled as audited rather than solve/install validated.
+2. Changed the Stage 3 default assembler set to `flye,canu,hifiasm,miniasm,myloasm` while retaining the complete canonical helper catalog and `wtdbg2` compatibility alias for explicit selections.
+3. Added Stage 4 `--read-group ID` and `dorado_read_group` support with printable-ID validation, exact BAM-header membership checks, and reuse of `--RG ID` in both Dorado polish passes.
+4. Corrected repository-relative documentation links, Stage 3 `seqkit` requirements and synopsis, all active `-h, --help` listings, config-key mappings, assembler-check layers, extra-argument limitations, and the minimal invocation example.
+5. Expanded the documented stage handoffs, subsampling provenance, conditional BAM retention, and principal taxonomy outputs using the current script filenames.
+6. Added standard-library regression checks for the new CLI/documentation contracts and environment-file artifacts. Real environment solving, installation, tool verification, and representative-data execution remain HPC acceptance tasks.
+
 Date: 2026-08-27
 Author: Codex
 

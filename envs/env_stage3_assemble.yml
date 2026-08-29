@@ -1,0 +1,37 @@
+name: prokaryont-stage3-assemble
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  # Supporting runtime and optional parallel gzip implementation.
+  - python>=3.10,<3.12
+  - pigz
+
+  # Direct unconditional Stage 3 preflight requirements.
+  - autocycler>=0.5.0
+  - parallel>=20230122
+  - seqkit>=2.8.0
+  - minimap2>=2.28
+  - samtools>=1.19
+
+  # Direct conditional requirements for supported Stage 3 modes.
+  - rasusa>=0.8.0
+  - plassembler>=1.6.0
+
+  # Optional dotplot tools and the plotting runtime used by mummerplot.
+  - mummer4>=4.0.0rc1
+  - gnuplot
+
+  # Default five-assembler ensemble and its supporting runtimes.
+  - flye>=2.9.3
+  - canu>=2.2
+  - openjdk>=11
+  - hifiasm>=0.19.8
+  - miniasm>=0.3_r179
+  - minipolish>=0.1.3
+  - racon>=1.5.0
+  - myloasm>=0.1.0
+
+# Additional canonical helpers remain selectable with --assemblers, but their
+# backends must be installed separately as described in the environment guide.

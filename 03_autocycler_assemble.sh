@@ -3,7 +3,7 @@
 # 03_autocycler_assemble.sh — Autocycler multi-assembler subsampling & resolution
 # ==============================================================================
 # Usage:
-#   bash 03_autocycler_assemble.sh --read-type ont_r10 [OPTIONS]
+#   bash 03_autocycler_assemble.sh [OPTIONS]
 #   (reads filtered_input.fastq.gz by default, or custom reads path via --reads / --input-fastq)
 #
 # Optional flags:
@@ -13,6 +13,7 @@
 #   --read-type TYPE        Read type: ont_r9|ont_r10|pacbio_clr|pacbio_hifi (default: ont_r10)
 #   --genome-size SIZE      Override genome size (skip re-estimation)
 #   --assemblers LIST       Comma-separated Autocycler helper tasks to run
+#                           (default: flye,canu,hifiasm,miniasm,myloasm)
 #   --subsample-count N     Number of read subsamples (default: 4)
 #   --subsampler NAME       autocycler|rasusa (default: autocycler)
 #   --subsample-seed N      Base seed for reproducible subsampling (default: 0)
@@ -37,11 +38,11 @@
 #   --trim-min-identity N   Autocycler trim min alignment identity (default: 0.75)
 #   --skip-curation         Skip manual curation pauses
 #   --dry-run               Print commands without executing
-#   --help                  Show this help
+#   -h, --help              Show this help
 #
-# To pass extra arguments to individual assemblers, set them in pipeline.conf
-# (e.g. flye_extra_args=--meta) or export them before running:
-#   export assembler_args=( [flye]="--meta" [raven]="--graphical-fragment-assembly" )
+# Pass extra arguments to individual assemblers through scalar pipeline.conf
+# keys (e.g. flye_extra_args=--meta). Values are not evaluated as shell syntax,
+# so complex nested quoting is not preserved.
 # ==============================================================================
 
 source "$(dirname "$0")/00_setup.sh"
@@ -79,7 +80,7 @@ skip_contained_dedup="${skip_contained_dedup:-}"
 plassembler_db="${plassembler_db:-}"
 skip_plsdb_screen="${skip_plsdb_screen:-}"
 
-# Assembler extra args (associative array — set via config file or before sourcing)
+# Assembler extra args (associative array populated from scalar config values)
 declare -A assembler_args 2>/dev/null || true
 : "${assembler_args[flye]:=}"
 : "${assembler_args[metamdbg]:=}"
@@ -94,7 +95,7 @@ declare -A assembler_args 2>/dev/null || true
 : "${assembler_args[redbean]:=}"
 : "${assembler_args[necat]:=}"
 
-assembler_list="flye,canu,hifiasm,ilesta,lja,raven,miniasm,metamdbg,myloasm,plassembler,nextdenovo,redbean,necat"
+assembler_list="flye,canu,hifiasm,miniasm,myloasm"
 assemblers_explicit=false
 if [[ -n "${PROKARYONT_ASSEMBLERS:-}" ]]; then
     assembler_list="${PROKARYONT_ASSEMBLERS}"
@@ -103,7 +104,7 @@ fi
 
 # --- Usage -------------------------------------------------------------------
 usage() {
-    echo "Usage: $(basename "$0") --read-type TYPE [OPTIONS]"
+    echo "Usage: $(basename "$0") [OPTIONS]"
     echo ""
     echo "Optional:"
     echo "  --config FILE               Path to pipeline.conf"
@@ -113,6 +114,7 @@ usage() {
     echo "  --sample-name NAME          Sample name for metrics (default: MyBacteria)"
     echo "  --genome-size SIZE          Override genome size (skip re-estimation)"
     echo "  --assemblers LIST           Comma-separated Autocycler helper tasks"
+    echo "                              Default: flye,canu,hifiasm,miniasm,myloasm"
     echo "                              Canonical: flye,canu,hifiasm,ilesta,lja,raven,miniasm,metamdbg,myloasm,plassembler,nextdenovo,redbean,necat"
     echo "                              Compatibility alias: wtdbg2 (normalized to redbean)"
     echo "  --subsample-count N         Number of read subsamples (default: 4)"
@@ -140,7 +142,7 @@ usage() {
     echo "  --skip-plsdb-screen         Skip post-consensus PLSDB characterization"
     echo "  --skip-curation             Skip manual curation pauses"
     echo "  --dry-run                   Print commands without executing"
-    echo "  --help                      Show this help"
+    echo "  -h, --help                  Show this help"
     exit 0
 }
 

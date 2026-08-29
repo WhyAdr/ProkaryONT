@@ -23,7 +23,7 @@
 #   --lint-window N               Fastcat lint: DUST window size W (default: 64)
 #   --lint-max-proportion N       Fastcat lint: max tolerated masked fraction to keep read (default: 0.95)
 #   --dry-run                     Print commands without executing
-#   --help                        Show this help
+#   -h, --help                    Show this help
 # ==============================================================================
 
 source "$(dirname "$0")/00_setup.sh"
@@ -78,7 +78,7 @@ usage() {
     echo "  --lint-window N             DUST window size W (default: 64)"
     echo "  --lint-max-proportion N     Max tolerated masked fraction to keep read (default: 0.95)"
     echo "  --dry-run                   Print commands without executing"
-    echo "  --help                      Show this help"
+    echo "  -h, --help                  Show this help"
     exit 0
 }
 

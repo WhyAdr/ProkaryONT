@@ -10,7 +10,7 @@
 #   --threads N              Number of threads (default: 128)
 #   --barrnap-kingdom K      Barrnap kingdom (bac, arc, mito, euk) (default: bac)
 #   --dry-run                Print commands without executing
-#   --help                   Show this help
+#   -h, --help               Show this help
 # ==============================================================================
 
 source "$(dirname "$0")/00_setup.sh"
@@ -35,7 +35,7 @@ usage() {
     echo "  --threads N                  Number of threads (default: 128)"
     echo "  --barrnap-kingdom K          Barrnap kingdom: bac, arc, mito, euk (default: bac)"
     echo "  --dry-run                    Print commands without executing"
-    echo "  --help                       Show this help"
+    echo "  -h, --help                   Show this help"
     exit 0
 }
 

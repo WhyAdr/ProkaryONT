@@ -1,0 +1,22 @@
+name: prokaryont-stage1-qc
+channels:
+  - conda-forge
+  - bioconda
+  - nanoporetech
+  - defaults
+dependencies:
+  # Supporting runtime and optional parallel gzip implementation.
+  - python>=3.10,<3.12
+  - pigz
+
+  # Direct Stage 1 preflight requirements.
+  - nanoplot>=1.42.0
+  - fastcat>=0.18.0
+  - porechop_abi>=0.5.0
+  - snikt
+  - lrge>=0.1.0
+  - raven-assembler>=1.8.3
+  - meryl>=1.4.1
+
+# Stage 1 checks for the executable name `snikt.R`. If this package exposes
+# only `snikt`, follow the compatibility-symlink step in the environment guide.

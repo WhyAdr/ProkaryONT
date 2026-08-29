@@ -1,0 +1,20 @@
+name: prokaryont-stage5-taxonomy
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  # Direct Stage 5 requirements and optional script integrations.
+  - gtdbtk>=2.3.2
+  - mlst>=2.23.0
+  - barrnap>=0.9
+
+  # GTDB-Tk runtime packages declared explicitly for inspectability.
+  - hmmer>=3.3.2
+  - prodigal>=2.6.3
+  - fastani>=1.33
+  - mash>=2.3
+  - pplacer
+
+# GTDB-Tk constrains its compatible Python runtime. Let the solver select the
+# Python version instead of forcing the Stage 1-4 range in this environment.

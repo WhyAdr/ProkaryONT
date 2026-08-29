@@ -14,7 +14,7 @@
 #   --lint-threshold N      SDUST repetition threshold for profiling (default: 20)
 #   --lint-window N         SDUST window size for profiling (default: 64)
 #   --dry-run               Print commands without executing
-#   --help                  Show this help
+#   -h, --help              Show this help
 # ==============================================================================
 
 source "$(dirname "$0")/00_setup.sh"
@@ -50,7 +50,7 @@ usage() {
     echo "  --lint-threshold N          SDUST repetition threshold for profiling (default: 20)"
     echo "  --lint-window N             SDUST window size for profiling (default: 64)"
     echo "  --dry-run                   Print commands without executing"
-    echo "  --help                      Show this help"
+    echo "  -h, --help                  Show this help"
     exit 0
 }
 

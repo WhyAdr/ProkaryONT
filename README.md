@@ -22,14 +22,20 @@ are not active entrypoints.
 
 - QC/filtering: `NanoPlot`, `fastcat`, `porechop_abi`, `snikt.R`, `seqkit`,
   `filtlong`, `fastplong`, and optional `chopper`
-- Assembly: current `autocycler`, GNU `parallel`, `samtools`, `minimap2`, and
-  the selected assembler helpers
+- Assembly: current `autocycler`, GNU `parallel`, `seqkit`, `samtools`,
+  `minimap2`, and the selected assembler helpers
 - Optional Rasusa mode: a Rasusa release exposing `rasusa reads`
 - PLSDB screen: `plassembler` plus its database
 - Polishing/orientation: `dorado`, `samtools`, and `dnaapler`
 - Taxonomy: `gtdbtk`; `mlst` and `barrnap` are optional
 
-The canonical Stage 3 helper set is:
+Stage 3 defaults to this practical five-assembler set:
+
+```text
+flye,canu,hifiasm,miniasm,myloasm
+```
+
+The complete canonical helper catalog is:
 
 ```text
 flye,canu,hifiasm,ilesta,lja,raven,miniasm,metamdbg,myloasm,plassembler,nextdenovo,redbean,necat
@@ -39,12 +45,28 @@ flye,canu,hifiasm,ilesta,lja,raven,miniasm,metamdbg,myloasm,plassembler,nextdeno
 current Autocycler helper task `redbean`. iLesta additionally requires
 `Ilesta`, `minipolish`, `minimap2`, and `racon`; LJA requires `lja`.
 
+For each selected assembler, Stage 3 first applies a hard
+`autocycler helper ASSEMBLER --help` compatibility gate. Backend executable
+discovery is then a soft warning; a missing backend will still cause its GNU
+Parallel job to fail when executed.
+
 ## Environment setup
 
-For comprehensive per-stage Conda/Mamba YAML environment files, Slurm batch
-templates, and package verification steps, see:
+The committed per-stage Conda/Mamba files are:
+
+- [`env_stage1_qc.yml`](envs/env_stage1_qc.yml)
+- [`env_stage2_preproc.yml`](envs/env_stage2_preproc.yml)
+- [`env_stage3_assemble.yml`](envs/env_stage3_assemble.yml)
+- [`env_stage4_polish.yml`](envs/env_stage4_polish.yml)
+- [`env_stage5_taxonomy.yml`](envs/env_stage5_taxonomy.yml)
+
+For creation commands, dependency categories, Slurm examples, and the HPC
+validation record, see:
 
 👉 [`conda-environment-setup-for-each-prokaryont-script.md`](conda-environment-setup-for-each-prokaryont-script.md)
+
+The specifications are audited against current script checks; solve/install
+and representative-data validation remain HPC acceptance tasks.
 
 ### Essential Conda channel configuration
 
@@ -66,6 +88,27 @@ conda config --set channel_priority strict
 
 Copy and edit `pipeline.conf`, then run each stage explicitly. CLI values take
 precedence over config values.
+
+Common CLI/config mappings:
+
+| CLI option | `pipeline.conf` key |
+|---|---|
+| `--min-length` | `filtlong_min_length` |
+| `--keep-percent` | `filtlong_keep_percent` |
+| `--genome-size` | `genome_size_override` |
+| `--assemblers` | `assemblers` |
+| `--combine-reads` | `autocycler_combine_reads` |
+| `--combine-depth-kmer` | `autocycler_combine_depth_kmer` |
+| `--combine-threads` | `autocycler_combine_threads` |
+| `--compress-threads` | `autocycler_compress_threads` |
+| `--device` | `dorado_polish_device` |
+| `--read-group` | `dorado_read_group` |
+| `--gtdbtk-db` | `gtdbtk_data_path` |
+
+`PROKARYONT_ASSEMBLERS` is an environment override; `assemblers=` is the
+lowercase config key. Pass assembler-specific options through scalar
+`*_extra_args=` config values. Config values are trimmed strings rather than
+shell syntax, so complex nested quoting is not preserved.
 
 ### 1. QC and genome-size estimation
 
@@ -92,16 +135,26 @@ applied by Filtlong.
 
 ### 3. Assemble with Autocycler
 
-Select assemblers directly on the Stage 3 CLI:
+This minimal invocation uses the default five-assembler ensemble, avoids an
+interactive pause, and explicitly omits the optional database screen. It is a
+first-run example, not a universally optimal biological ensemble:
 
 ```bash
 bash 03_autocycler_assemble.sh \
   --config pipeline.conf \
   --reads filtered_input.fastq.gz \
   --read-type ont_r10 \
-  --assemblers flye,canu,hifiasm,ilesta,lja,raven,miniasm,metamdbg,myloasm,plassembler,nextdenovo,redbean,necat \
-  --plassembler-db /path/to/plassembler_db
+  --threads 48 \
+  --parallel-jobs 4 \
+  --canu-parallel-jobs 2 \
+  --skip-curation \
+  --skip-plsdb-screen
 ```
+
+Omitting `--assemblers` selects
+`flye,canu,hifiasm,miniasm,myloasm`. Pass `--assemblers` explicitly to use a
+different subset of the canonical catalog, after installing both the matching
+Autocycler helper tasks and backend executables.
 
 The default subsampler remains native Autocycler. Rasusa can generate the same
 `subsampled_reads/sample_NN.fastq` contract with deterministic distinct seeds:
@@ -111,7 +164,7 @@ bash 03_autocycler_assemble.sh \
   --reads filtered_input.fastq.gz \
   --read-type ont_r10 \
   --genome-size 5000000 \
-  --assemblers flye,lja,ilesta \
+  --assemblers flye,miniasm,myloasm \
   --subsampler rasusa \
   --subsample-count 4 \
   --subsample-seed 13 \
@@ -173,6 +226,11 @@ bash 04_polish_orient.sh \
 
 `--device` is passed only to `dorado polish`. It is reused for the optional
 second polish pass and does not constrain Dorado basecalling or alignment.
+For a non-interactive read-group choice, pass `--read-group ID` or set
+`dorado_read_group=ID`. The script rejects control or non-ASCII characters,
+verifies the exact ID in each aligned BAM header, and passes `--RG ID` to
+both Dorado polish passes. With multiple groups and no explicit ID,
+`--skip-curation` retains the existing `--ignore-read-groups` behavior.
 
 ### 5. Taxonomy
 
@@ -188,6 +246,9 @@ bash 05_taxonomy.sh \
 ```text
 01_qc/                                      Stage 1 and post-filter QC
 02_genome_size/                             Genome-size estimates
+filtered_input.fastq.gz                     Authoritative Stage 2 to Stage 3 handoff
+subsample.yaml                              Native Autocycler subsampling provenance, when present
+subsampled_reads/                           Subset metadata directory; sample FASTQs are removed after assembly
 assemblies/                                 Standardized helper assemblies and job logs
 assemblies_prepared/                        Validated, weighted inputs supplied to Autocycler
 assembly_assessment/                        Pre/post counts, event TSVs, logs, and fingerprints
@@ -199,10 +260,23 @@ plassembler_summary.tsv                     One PLSDB result row per consensus c
 rasusa_subsample.tsv                        Rasusa subset provenance, when selected
 metrics.tsv                                 Autocycler metrics
 contig_depths.tsv                           Independent mapping-based depth report
+all_reads_w_moves.bam                       Dorado move-table basecalls; conditional cleanup
+aligned.sorted.bam                          First-pass alignment; conditional cleanup
+aligned_reoriented.sorted.bam               Optional second-pass alignment; conditional cleanup
 polished_assembly.fasta                     Dorado-polished assembly
 dnaapler_reoriented.fasta                   Reoriented final assembly
-07_taxonomy/                                Stage 5 outputs
+07_taxonomy/gtdbtk.bac120.summary.tsv        Principal bacterial GTDB-Tk result, when produced
+07_taxonomy/gtdbtk.ar53.summary.tsv          Principal archaeal GTDB-Tk result, when produced
+07_taxonomy/mlst_result.tsv                  Optional MLST result
+07_taxonomy/rrna_predictions.gff3            Optional Barrnap rRNA calls
+07_taxonomy/16S_sequences.fasta              Optional Barrnap sequence export
+07_taxonomy/16S_only.fasta                   Filtered 16S-only sequence export
 ```
+
+Without `--cleanup-bam`, the Stage 4 BAMs are retained. With cleanup enabled,
+`aligned.sorted.bam` is removed after the first pass; `all_reads_w_moves.bam`
+is retained only until a requested second pass completes, and the second-pass
+alignment is then removed.
 
 ## Laptop-safe mock checks
 

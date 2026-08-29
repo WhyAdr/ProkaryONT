@@ -12,11 +12,12 @@
 #   --dorado-model MODEL    Dorado basecaller model (default: sup)
 #   --min-qscore N          Minimum quality score filter (default: 7)
 #   --device DEVICE         Dorado polish device (e.g. cuda:0, cuda:all, cpu)
+#   --read-group ID         Select one existing BAM read-group ID for polishing
 #   --cleanup-bam           Remove intermediate BAM files after polishing
 #   --double-polish         Run a second Dorado polish pass after dnaapler reorientation
 #   --skip-curation         Skip interactive prompts (auto-select defaults)
 #   --dry-run               Print commands without executing
-#   --help                  Show this help
+#   -h, --help              Show this help
 # ==============================================================================
 
 source "$(dirname "$0")/00_setup.sh"
@@ -29,6 +30,7 @@ sample_name="${sample_name:-}"
 dorado_model="${dorado_model:-}"
 dorado_min_qscore="${dorado_min_qscore:-}"
 dorado_polish_device="${dorado_polish_device:-}"
+dorado_read_group="${dorado_read_group:-}"
 cleanup_bam="${cleanup_bam:-}"
 double_polish="${double_polish:-}"
 skip_curation="${skip_curation:-}"
@@ -49,11 +51,12 @@ usage() {
     echo "  --dorado-model MODEL        Basecaller model: fast|hac|sup (default: sup)"
     echo "  --min-qscore N              Min quality score for basecalling (default: 7)"
     echo "  --device DEVICE             Dorado polish device (e.g. cuda:0, cuda:0,1, cuda:all, cpu)"
+    echo "  --read-group ID             Select one existing BAM read-group ID for polishing"
     echo "  --cleanup-bam               Remove intermediate BAM files after polishing"
     echo "  --double-polish             Second Dorado polish pass after reorientation"
     echo "  --skip-curation             Skip interactive prompts (auto-select defaults)"
     echo "  --dry-run                   Print commands without executing"
-    echo "  --help                      Show this help"
+    echo "  -h, --help                  Show this help"
     exit 0
 }
 
@@ -68,6 +71,9 @@ while [[ $# -gt 0 ]]; do
         --dorado-model)  dorado_model="$2"; shift 2 ;;
         --min-qscore)    dorado_min_qscore="$2"; shift 2 ;;
         --device)        dorado_polish_device="$2"; shift 2 ;;
+        --read-group)
+            [[ $# -ge 2 && -n "$2" ]] || log_error "--read-group requires a non-empty ID."
+            dorado_read_group="$2"; shift 2 ;;
         --cleanup-bam)   cleanup_bam=true; shift ;;
         --double-polish) double_polish=true; shift ;;
         --skip-curation) skip_curation=true; shift ;;
@@ -85,6 +91,20 @@ sample_name="${sample_name:-MyBacteria}"
 dorado_model="${dorado_model:-sup}"
 dorado_min_qscore="${dorado_min_qscore:-7}"
 
+read_group_id_is_valid() {
+    local requested_id="$1"
+    [[ -n "${requested_id}" ]] &&
+        [[ "${requested_id}" != *$'\t'* ]] &&
+        [[ "${requested_id}" != *$'\r'* ]] &&
+        [[ "${requested_id}" != *$'\n'* ]] &&
+        LC_ALL=C grep -Eq '^[ -~]+$' <<< "${requested_id}"
+}
+
+if [[ -n "${dorado_read_group}" ]] &&
+   ! read_group_id_is_valid "${dorado_read_group}"; then
+    log_error "--read-group ID must contain only printable ASCII characters without tabs or line breaks."
+fi
+
 # Set GZIP_BIN now that threads are parsed
 export GZIP_BIN="$(get_gzip_cmd)"
 
@@ -98,11 +118,57 @@ require_tool dorado
 require_tool samtools
 require_tool dnaapler
 
+read_group_exists() {
+    local header="$1"
+    local requested_id="$2"
+    local field
+    local -a fields=()
+    while IFS=$'\t' read -r -a fields; do
+        [[ "${fields[0]:-}" == "@RG" ]] || continue
+        for field in "${fields[@]:1}"; do
+            if [[ "${field}" == ID:* && "${field#ID:}" == "${requested_id}" ]]; then
+                return 0
+            fi
+        done
+    done <<< "${header}"
+    return 1
+}
+
+validate_read_group_in_bam() {
+    local bam="$1"
+    local requested_id="$2"
+    local header
+    local field
+    local -a fields=()
+    local -a available_ids=()
+    if ! header=$(samtools view -H "${bam}"); then
+        log_error "Could not read the BAM header while validating read-group ID '${requested_id}': ${bam}."
+    fi
+    if read_group_exists "${header}" "${requested_id}"; then
+        return 0
+    fi
+    while IFS=$'\t' read -r -a fields; do
+        [[ "${fields[0]:-}" == "@RG" ]] || continue
+        for field in "${fields[@]:1}"; do
+            [[ "${field}" == ID:* ]] && available_ids+=("${field#ID:}")
+        done
+    done <<< "${header}"
+    local available_text="none"
+    if (( ${#available_ids[@]} > 0 )); then
+        local IFS=,
+        available_text="${available_ids[*]}"
+    fi
+    log_error "Read-group ID '${requested_id}' was not found in ${bam}. Available IDs: ${available_text}."
+}
+
 # --- Derived paths -----------------------------------------------------------
 polished_assembly="$(pwd)/polished_assembly.fasta"
 reoriented_assembly="$(pwd)/dnaapler_reoriented.fasta"
 dorado_rg_flag=()
 dorado_device_flag=()
+if [[ -n "${dorado_read_group}" ]]; then
+    dorado_rg_flag=(--RG "${dorado_read_group}")
+fi
 if [[ -n "${dorado_polish_device}" ]]; then
     dorado_device_flag=(--device "${dorado_polish_device}")
 fi
@@ -160,7 +226,6 @@ else
     fi
 
     log_info "10c. Checking for move tables & polishing..."
-    dorado_rg_flag=()
     if [[ -z "${dry_run:-}" ]]; then
         # Temporarily disable pipefail: grep -m 1 -q exits early, causing
         # samtools view to receive SIGPIPE (exit 141) under pipefail.
@@ -175,7 +240,11 @@ else
         rg_lines=$(samtools view -H aligned.sorted.bam | grep "^@RG" || true)
         rg_count=$(echo "$rg_lines" | grep -c "^@RG" || true)
 
-        if [[ "$rg_count" -gt 1 ]]; then
+        if [[ -n "${dorado_read_group}" ]]; then
+            validate_read_group_in_bam aligned.sorted.bam "${dorado_read_group}"
+            dorado_rg_flag=(--RG "${dorado_read_group}")
+            log_info "Using requested read group ID for Dorado polish: ${dorado_read_group}"
+        elif [[ "$rg_count" -gt 1 ]]; then
             echo ""
             log_warn "========================================================================"
             log_warn "MULTIPLE READ GROUPS DETECTED in aligned.sorted.bam (${rg_count} groups)"
@@ -199,7 +268,12 @@ else
                     case "$rg_choice" in
                         1)
                             read -rp "  Enter the exact Read Group ID to use: " selected_rg
-                            if echo "$rg_lines" | grep -q "ID:${selected_rg}[[:space:]]"; then
+                            if ! read_group_id_is_valid "${selected_rg}"; then
+                                log_warn "Read Group ID must contain only printable ASCII characters without tabs or line breaks. Try again."
+                                continue
+                            fi
+                            if read_group_exists "${rg_lines}" "${selected_rg}"; then
+                                dorado_read_group="${selected_rg}"
                                 dorado_rg_flag=("--RG" "${selected_rg}")
                                 log_info "Selected read group ID: ${selected_rg}"
                                 break
@@ -236,7 +310,7 @@ else
                             ;;
                         4)
                             log_info "Operator elected to abort. Exiting cleanly."
-                            echo "  Tip: Re-run with '--RG <id>' after manual inspection, or"
+                            echo "  Tip: Re-run with '--read-group <id>' after manual inspection, or"
                             echo "  pre-unify with: samtools addreplacerg -m overwrite_all ..."
                             exit 1
                             ;;
@@ -328,6 +402,9 @@ if [[ -n "${double_polish:-}" ]]; then
         run_cmd samtools index -@ "${threads}" aligned_reoriented.sorted.bam
 
         log_info "11b-ii. Polishing reoriented assembly..."
+        if [[ -z "${dry_run:-}" && -n "${dorado_read_group}" ]]; then
+            validate_read_group_in_bam aligned_reoriented.sorted.bam "${dorado_read_group}"
+        fi
         _polish2_tmp="polished_reoriented_tmp.fasta"
         run_cmd bash -c 'dorado polish "$1" "$2" \
             --bacteria --threads "$3" "${@:5}" \
